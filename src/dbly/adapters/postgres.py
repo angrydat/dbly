@@ -47,6 +47,12 @@ class PostgresAdapter(Adapter):
                 if stmt.strip():
                     conn.execute(text(stmt))
 
+    def state_table_ddl(self) -> str:
+        return _STATE_DDL.strip() + ";"
+
+    def record_deploy_sql(self, ref: str) -> str:
+        return f"INSERT INTO dbly_state (deployed_sha) VALUES ('{ref.replace(chr(39), chr(39) * 2)}');"
+
     def ensure_state_table(self) -> None:
         with self.engine.begin() as conn:
             conn.execute(text(_STATE_DDL))

@@ -60,6 +60,15 @@ class Adapter(abc.ABC):
     @abc.abstractmethod
     def record_deploy(self, ref: str, migration_ids: list[str]) -> None: ...
 
+    # --- pure SQL builders (no connection — used by `plan --sql` export) ----------------
+    @abc.abstractmethod
+    def state_table_ddl(self) -> str:
+        """``CREATE TABLE IF NOT EXISTS dbly_state …`` for this engine."""
+
+    @abc.abstractmethod
+    def record_deploy_sql(self, ref: str) -> str:
+        """A standalone ``INSERT`` recording the deploy — for hand-run scripts."""
+
     def dispose(self) -> None:
         if self._engine is not None:
             self._engine.dispose()

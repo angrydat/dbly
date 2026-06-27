@@ -54,10 +54,14 @@ def _make_plan(repo_path: Path, target: str, from_ref: Optional[str], to_ref: st
     dialect = sqlglot_dialect(detect_dialect(cfg))
     adapter = get_adapter(cfg)
     try:
-        resolved_from = from_ref if from_ref is not None else adapter.get_deployed_ref()
+        resolved_to = repo.resolve_ref(to_ref)
+        if from_ref is not None:
+            resolved_from = repo.resolve_ref(from_ref)
+        else:
+            resolved_from = adapter.get_deployed_ref()  # already a SHA, or None (bootstrap)
         return build_plan(
             repo, adapter,
-            from_ref=resolved_from, to_ref=to_ref,
+            from_ref=resolved_from, to_ref=resolved_to,
             target=target, dialect=dialect,
         )
     finally:
@@ -73,13 +77,29 @@ def plan(
     target: str = typer.Option(..., "--target", help="connection profile or env name."),
     repo_path: Path = typer.Option(Path("."), "--repo", help="repository root."),
     out: Optional[Path] = typer.Option(None, "--out", help="write the plan as YAML."),
+    sql: Optional[Path] = typer.Option(
+        None, "--sql", help="write an executable SQL script for a hand/offline deploy."
+    ),
 ) -> None:
     """Compute and show the deployment plan."""
     plan_obj = _make_plan(repo_path, target, from_ref, to)
     report.render_plan(plan_obj, console)
     if out:
         out.write_text(report.plan_to_yaml(plan_obj), encoding="utf-8")
-        console.print(f"\n[dim]plan written to {out}[/dim]")
+        console.print(f"\n[dim]plan (YAML) written to {out}[/dim]")
+    if sql:
+        # state_table_ddl / record_deploy_sql are pure string builders — no DB connection.
+        adapter = get_adapter(resolve_target(target))
+        try:
+            script = report.plan_to_sql(
+                plan_obj,
+                state_ddl=adapter.state_table_ddl(),
+                record_sql=adapter.record_deploy_sql(plan_obj.to_ref),
+            )
+        finally:
+            adapter.dispose()
+        sql.write_text(script, encoding="utf-8")
+        console.print(f"[dim]deploy SQL written to {sql}[/dim]")
 
 
 @app.command()

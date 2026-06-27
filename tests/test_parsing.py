@@ -54,6 +54,38 @@ def test_topological_order_dependencies_first():
     assert names.index("b") < names.index("a")
 
 
+def test_plan_to_sql_is_executable_script():
+    plan = Plan(target="prod", from_ref="abc123", to_ref="def456")
+    plan.steps.append(
+        Step(
+            title="add column app.kunde.email",
+            object_id=None,
+            kind=ObjectKind.TABLE,
+            severity=Severity.ADDITIVE,
+            sql="ALTER TABLE app.kunde ADD COLUMN email text",  # no trailing ;
+        )
+    )
+    plan.steps.append(
+        Step(
+            title="drop column app.kunde.legacy",
+            object_id=None,
+            kind=ObjectKind.TABLE,
+            severity=Severity.DESTRUCTIVE,
+            sql="ALTER TABLE app.kunde DROP COLUMN legacy;",
+        )
+    )
+    script = report.plan_to_sql(
+        plan,
+        state_ddl="CREATE TABLE IF NOT EXISTS dbly_state (deployed_sha text);",
+        record_sql="INSERT INTO dbly_state (deployed_sha) VALUES ('def456');",
+    )
+    assert "ALTER TABLE app.kunde ADD COLUMN email text;" in script  # ; appended
+    assert "!! DESTRUCTIVE" in script
+    assert "dbly_state" in script
+    assert "VALUES ('def456')" in script
+    assert "def456" in script and "abc123" in script  # header refs
+
+
 def test_plan_yaml_roundtrip():
     plan = Plan(target="t", from_ref="abc", to_ref="HEAD")
     plan.steps.append(

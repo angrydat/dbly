@@ -91,6 +91,14 @@ class Repo:
             changes.append(FileChange(rel, mapping.get(code, ChangeType.MODIFIED)))
         return changes
 
+    def resolve_ref(self, ref: str) -> str:
+        """Resolve a symbolic ref (HEAD, a tag, a branch) to its immutable commit SHA.
+
+        The ledger and plan headers store the SHA, not ``HEAD`` — so a later ``--from``
+        diff is stable regardless of where HEAD has since moved.
+        """
+        return self._git("rev-parse", ref).strip()
+
     def read_at(self, ref: str, rel: Path) -> str:
         """File content at a given ref (the *desired* state)."""
         return self._git("show", f"{ref}:{rel.as_posix()}")

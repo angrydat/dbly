@@ -50,6 +50,45 @@ def render_plan(plan: Plan, console: Console) -> None:
         )
 
 
+def plan_to_sql(plan: Plan, *, state_ddl: str | None = None, record_sql: str | None = None) -> str:
+    """Render the plan as a single, ordered vanilla-SQL script (CONCEPT.md §7).
+
+    Self-contained for a hand-run on a system without dbly: ledger DDL up front, each step
+    annotated with its severity/source, the deploy recorded at the end. Destructive steps
+    are included but loudly marked — the human reviewing the script is the gate.
+    """
+    out: list[str] = [
+        "-- dbly deployment script — review before running.",
+        f"-- target: {plan.target}",
+        f"-- refs:   {plan.from_ref or '<empty>'} -> {plan.to_ref}",
+        "-- run by hand via psql / sqlplus / sqlcmd. Wrap in a transaction on",
+        "-- transactional-DDL engines (e.g. Postgres) if you want all-or-nothing.",
+    ]
+    if plan.has_destructive:
+        out.append("-- WARNING: contains DESTRUCTIVE steps (marked !! below).")
+    for w in plan.warnings:
+        out.append(f"--   ! {w}")
+    out.append("")
+
+    if state_ddl:
+        out += ["-- ledger table (no-op if it already exists)", state_ddl, ""]
+
+    for i, step in enumerate(plan.steps, 1):
+        mark = " !! DESTRUCTIVE" if step.severity is Severity.DESTRUCTIVE else ""
+        out.append(f"-- [{i}] {step.severity.value}{mark}: {step.title}")
+        if step.source_file:
+            out.append(f"--     source: {step.source_file}")
+        if step.note:
+            out.append(f"--     note: {step.note}")
+        sql = step.sql.rstrip()
+        out.append(sql if sql.endswith(";") else sql + ";")
+        out.append("")
+
+    if record_sql:
+        out += ["-- record the deploy in the dbly ledger", record_sql, ""]
+    return "\n".join(out)
+
+
 def plan_to_yaml(plan: Plan) -> str:
     doc = {
         "target": plan.target,
