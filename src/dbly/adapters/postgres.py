@@ -9,7 +9,8 @@ from __future__ import annotations
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
-from dbly.model import ObjectId, ObjectKind
+from dbly.model import LiveObject, ObjectId, ObjectKind
+from dbly.parsing import canonical_hash
 
 _STATE_DDL = """
 CREATE TABLE IF NOT EXISTS dbly_state (
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS dbly_state (
 
 class PostgresAdapter(Adapter):
     transactional_ddl = True
+    default_schema = "public"
 
     def table_exists(self, schema: str | None, name: str) -> bool:
         insp = inspect(self.engine)
@@ -55,6 +57,51 @@ class PostgresAdapter(Adapter):
                 ),
                 {"n": name, "s": schema},
             ).first() is not None
+
+    _RELKIND = {
+        "r": ObjectKind.TABLE, "p": ObjectKind.TABLE, "v": ObjectKind.VIEW,
+        "m": ObjectKind.VIEW, "i": ObjectKind.INDEX, "S": ObjectKind.SEQUENCE,
+    }
+
+    def inventory(self) -> list[LiveObject]:
+        rels = text(
+            "SELECT n.nspname, c.relname, c.relkind, "
+            "  CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid) END "
+            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname NOT IN ('pg_catalog','information_schema','pg_toast') "
+            "  AND c.relkind IN ('r','p','v','m','i','S')"
+        )
+        routines = text(
+            "SELECT n.nspname, p.proname, p.prokind, pg_get_functiondef(p.oid) "
+            "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
+            "  AND p.prokind IN ('f','p')"
+        )
+        triggers = text(
+            "SELECT n.nspname, t.tgname, pg_get_triggerdef(t.oid) "
+            "FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE NOT t.tgisinternal "
+            "  AND n.nspname NOT IN ('pg_catalog','information_schema')"
+        )
+        found: dict[str, LiveObject] = {}
+        with self.engine.connect() as conn:
+            for schema, name, relkind, src in conn.execute(rels):
+                kind = self._RELKIND.get(relkind)
+                if kind is None:
+                    continue
+                h = canonical_hash(src, dialect="postgres") if kind is ObjectKind.VIEW else None
+                obj = LiveObject(kind, ObjectId(schema, name), h)
+                found[obj.key()] = obj
+            for schema, name, prokind, src in conn.execute(routines):
+                kind = ObjectKind.PROCEDURE if prokind == "p" else ObjectKind.FUNCTION
+                obj = LiveObject(kind, ObjectId(schema, name), canonical_hash(src, dialect="postgres"))
+                found[obj.key()] = obj
+            for schema, name, src in conn.execute(triggers):
+                obj = LiveObject(ObjectKind.TRIGGER, ObjectId(schema, name),
+                                 canonical_hash(src, dialect="postgres"))
+                found[obj.key()] = obj
+        return list(found.values())
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         parts = [f"ALTER TABLE {table} ADD COLUMN {col.name} {col.type}"]

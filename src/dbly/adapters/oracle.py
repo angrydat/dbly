@@ -24,7 +24,8 @@ import re
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
-from dbly.model import ObjectId, ObjectKind
+from dbly.model import LiveObject, ObjectId, ObjectKind
+from dbly.parsing import canonical_hash
 
 _SLASH_RE = re.compile(r"(?m)^\s*/\s*$")
 _PLSQL_RE = re.compile(
@@ -115,6 +116,48 @@ class OracleAdapter(Adapter):
             q = "SELECT 1 FROM all_objects WHERE object_name = :n AND (:s IS NULL OR owner = :s)"
         with self.engine.connect() as conn:
             return conn.execute(text(q), {"n": n, "s": s}).first() is not None
+
+    _TYPEMAP = {
+        "TABLE": ObjectKind.TABLE, "VIEW": ObjectKind.VIEW, "INDEX": ObjectKind.INDEX,
+        "SEQUENCE": ObjectKind.SEQUENCE, "FUNCTION": ObjectKind.FUNCTION,
+        "PROCEDURE": ObjectKind.PROCEDURE, "TRIGGER": ObjectKind.TRIGGER,
+        "PACKAGE": ObjectKind.PACKAGE, "PACKAGE BODY": ObjectKind.PACKAGE,
+        "TYPE": ObjectKind.TYPE,
+    }
+
+    def inventory(self) -> list[LiveObject]:
+        existence = text(
+            "SELECT object_type, object_name FROM all_objects "
+            "WHERE owner = USER AND object_name NOT LIKE 'BIN$%' AND object_type IN "
+            "('TABLE','VIEW','INDEX','SEQUENCE','FUNCTION','PROCEDURE','TRIGGER',"
+            " 'PACKAGE','PACKAGE BODY','TYPE')"
+        )
+        # procedural source, one round-trip, grouped by object (line-ordered VARCHAR2 — no LONG)
+        sources = text(
+            "SELECT name, type, text FROM all_source "
+            "WHERE owner = USER AND type IN "
+            "('FUNCTION','PROCEDURE','TRIGGER','PACKAGE','PACKAGE BODY','TYPE') "
+            "ORDER BY name, type, line"
+        )
+        found: dict[str, LiveObject] = {}
+        src_text: dict[str, list[str]] = {}
+        with self.engine.connect() as conn:
+            for otype, name in conn.execute(existence):
+                kind = self._TYPEMAP.get(otype)
+                if kind is None:
+                    continue
+                obj = LiveObject(kind, ObjectId(None, name))
+                found[obj.key()] = obj
+            for name, otype, line in conn.execute(sources):
+                kind = self._TYPEMAP.get(otype)
+                if kind is None:
+                    continue
+                key = LiveObject(kind, ObjectId(None, name)).key()
+                src_text.setdefault(key, []).append(line or "")
+        for key, lines in src_text.items():
+            if key in found:
+                found[key].source_hash = canonical_hash("".join(lines), dialect="oracle")
+        return list(found.values())
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         parts = [f"ALTER TABLE {table} ADD {col.name} {col.type}"]

@@ -10,6 +10,7 @@ applied verbatim per dialect by the adapter.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import sqlglot
@@ -118,6 +119,28 @@ def parse_file(
             )
         )
     return objects
+
+
+def canonical_hash(sql: str | None, *, dialect: str | None = None) -> str | None:
+    """A formatting-insensitive hash of a definition, for advisory drift detection.
+
+    Both sides (repo desired + live DB source) are canonicalized the same way: parse with
+    sqlglot and re-render in one dialect, then hash. Views/SELECTs canonicalize reliably;
+    procedural bodies that sqlglot cannot fully parse fall back to whitespace/case
+    normalization (best effort — may still yield false positives across the repo↔DB boundary).
+    """
+    if not sql or not sql.strip():
+        return None
+    try:
+        rendered = ";".join(
+            e.sql(dialect=dialect, normalize=True, pretty=False)
+            for e in sqlglot.parse(sql, read=dialect)
+            if e is not None
+        )
+        canon = rendered.lower()
+    except Exception:  # noqa: BLE001 — procedural body sqlglot can't parse → text fallback
+        canon = " ".join(sql.lower().split())
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
 
 
 def desired_columns(sql: str, *, dialect: str | None = None) -> list[Column]:

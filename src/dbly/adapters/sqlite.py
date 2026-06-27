@@ -9,7 +9,8 @@ from __future__ import annotations
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
-from dbly.model import ObjectId, ObjectKind
+from dbly.model import LiveObject, ObjectId, ObjectKind
+from dbly.parsing import canonical_hash
 
 _STATE_DDL = """
 CREATE TABLE IF NOT EXISTS dbly_state (
@@ -48,6 +49,27 @@ class SqliteAdapter(Adapter):
             q = "SELECT 1 FROM sqlite_master WHERE name=:n"
         with self.engine.connect() as conn:
             return conn.execute(text(q), {"n": name}).first() is not None
+
+    _TYPEMAP = {
+        "table": ObjectKind.TABLE, "view": ObjectKind.VIEW,
+        "index": ObjectKind.INDEX, "trigger": ObjectKind.TRIGGER,
+    }
+
+    def inventory(self) -> list[LiveObject]:
+        out: dict[str, LiveObject] = {}
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+            )
+            for typ, name, sql in rows:
+                kind = self._TYPEMAP.get(typ)
+                if kind is None:
+                    continue
+                h = (canonical_hash(sql, dialect="sqlite")
+                     if kind in (ObjectKind.VIEW, ObjectKind.TRIGGER) else None)
+                obj = LiveObject(kind, ObjectId(None, name), h)
+                out[obj.key()] = obj
+        return list(out.values())
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         # SQLite has no schemas; ignore the schema qualifier.

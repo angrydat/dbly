@@ -14,7 +14,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from dbly import __version__, hooks, initializer, report
+from dbly import __version__, drift, hooks, initializer, report
 from dbly.adapters import get_adapter
 from dbly.config import resolve_target
 from dbly.engine import detect_dialect
@@ -216,15 +216,39 @@ def check(
     target: str = typer.Option(..., "--target"),
     to: str = typer.Option("HEAD", "--to"),
     repo_path: Path = typer.Option(Path("."), "--repo"),
+    orphans: bool = typer.Option(
+        False, "--orphans", help="also report objects in the DB but not in the repo."
+    ),
 ) -> None:
-    """Detect drift: compare desired state at <to> against the live database."""
-    plan_obj = _make_plan(repo_path, target, None, to)
-    drift = [s for s in plan_obj.steps] + plan_obj.warnings
-    if not drift:
-        console.print("[green]no drift — database matches desired state.[/green]")
+    """Detect drift: compare the desired state at <to> against the live database."""
+    repo = Repo(repo_path)
+    cfg = resolve_target(target)
+    dialect = sqlglot_dialect(detect_dialect(cfg))
+    adapter = get_adapter(cfg)
+    try:
+        rep = drift.compute_drift(
+            repo, adapter,
+            to_ref=repo.resolve_ref(to), dialect=dialect, include_orphans=orphans,
+        )
+    finally:
+        adapter.dispose()
+
+    if rep.clean:
+        console.print("[green]no drift — database matches the desired state.[/green]")
         return
-    report.render_plan(plan_obj, console)
-    console.print("\n[yellow]drift detected (see steps/warnings above).[/yellow]")
+
+    for kind, oid in rep.missing:
+        console.print(f"[yellow]missing[/yellow]   {kind.value} {oid}  (in repo, not in DB)")
+    for cd in rep.columns:
+        if cd.added:
+            console.print(f"[yellow]columns[/yellow]   {cd.table}  to add: {', '.join(cd.added)}")
+        if cd.removed:
+            console.print(f"[red]columns[/red]   {cd.table}  only in DB: {', '.join(cd.removed)}")
+    for kind, oid in rep.definitions:
+        console.print(f"[yellow]changed[/yellow]   {kind.value} {oid}  (definition differs — advisory)")
+    for kind, oid in rep.orphaned:
+        console.print(f"[dim]orphaned[/dim]  {kind.value} {oid}  (in DB, not in repo)")
+    raise typer.Exit(code=1)
 
 
 def _run_hooks(repo: Repo, phase: str, py_interpreter: str) -> None:

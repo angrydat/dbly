@@ -19,7 +19,8 @@ import re
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
-from dbly.model import ObjectId, ObjectKind
+from dbly.model import LiveObject, ObjectId, ObjectKind
+from dbly.parsing import canonical_hash
 
 _GO_RE = re.compile(r"^\s*GO\s*$", re.IGNORECASE | re.MULTILINE)
 
@@ -38,6 +39,7 @@ END
 
 class MssqlAdapter(Adapter):
     transactional_ddl = True
+    default_schema = "dbo"
 
     def table_exists(self, schema: str | None, name: str) -> bool:
         return inspect(self.engine).has_table(name, schema=schema)
@@ -72,6 +74,47 @@ class MssqlAdapter(Adapter):
                 ).first() is not None
             qname = f"{schema}.{name}" if schema else name
             return conn.execute(text("SELECT OBJECT_ID(:q)"), {"q": qname}).scalar() is not None
+
+    _OBJTYPE = {
+        "U": ObjectKind.TABLE, "V": ObjectKind.VIEW, "P": ObjectKind.PROCEDURE,
+        "FN": ObjectKind.FUNCTION, "IF": ObjectKind.FUNCTION, "TF": ObjectKind.FUNCTION,
+        "TR": ObjectKind.TRIGGER,
+    }
+
+    def inventory(self) -> list[LiveObject]:
+        objs = text(
+            "SELECT s.name, o.name, RTRIM(o.type), OBJECT_DEFINITION(o.object_id) "
+            "FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id "
+            "WHERE o.is_ms_shipped = 0 AND RTRIM(o.type) IN ('U','V','P','FN','IF','TF','TR')"
+        )
+        idx = text(
+            "SELECT s.name, i.name FROM sys.indexes i "
+            "JOIN sys.objects o ON o.object_id = i.object_id "
+            "JOIN sys.schemas s ON s.schema_id = o.schema_id "
+            "WHERE o.is_ms_shipped = 0 AND i.name IS NOT NULL "
+            "  AND i.is_primary_key = 0 AND i.type > 0"
+        )
+        seqs = text(
+            "SELECT s.name, q.name FROM sys.sequences q "
+            "JOIN sys.schemas s ON s.schema_id = q.schema_id"
+        )
+        hashed = {ObjectKind.VIEW, ObjectKind.PROCEDURE, ObjectKind.FUNCTION, ObjectKind.TRIGGER}
+        found: dict[str, LiveObject] = {}
+        with self.engine.connect() as conn:
+            for schema, name, otype, src in conn.execute(objs):
+                kind = self._OBJTYPE.get(otype)
+                if kind is None:
+                    continue
+                h = canonical_hash(src, dialect="tsql") if kind in hashed else None
+                obj = LiveObject(kind, ObjectId(schema, name), h)
+                found[obj.key()] = obj
+            for schema, name in conn.execute(idx):
+                obj = LiveObject(ObjectKind.INDEX, ObjectId(schema, name))
+                found[obj.key()] = obj
+            for schema, name in conn.execute(seqs):
+                obj = LiveObject(ObjectKind.SEQUENCE, ObjectId(schema, name))
+                found[obj.key()] = obj
+        return list(found.values())
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         # T-SQL: ADD, not ADD COLUMN

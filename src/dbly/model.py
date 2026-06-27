@@ -88,6 +88,22 @@ class ParsedObject:
         return self.kind.object_class
 
 
+@dataclass(slots=True)
+class LiveObject:
+    """An object discovered in the live database by introspection (the *reality* layer).
+
+    ``source_hash`` is a canonicalized hash of the definition for procedural/definitional
+    objects (views, functions, procedures, triggers) — used for advisory drift detection.
+    """
+
+    kind: ObjectKind
+    id: ObjectId
+    source_hash: str | None = None
+
+    def key(self) -> str:
+        return f"{self.kind.value}:{self.id.key()}"
+
+
 class ChangeType(str, Enum):
     ADDED = "added"
     MODIFIED = "modified"

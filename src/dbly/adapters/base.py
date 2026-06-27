@@ -17,7 +17,7 @@ from sqlalchemy import Engine
 
 from dbly.config import ConnectionConfig
 from dbly.engine import make_engine
-from dbly.model import Column, ObjectId, ObjectKind
+from dbly.model import Column, LiveObject, ObjectId, ObjectKind
 
 __all__ = ["Adapter", "Column"]
 
@@ -27,6 +27,10 @@ class Adapter(abc.ABC):
 
     #: whether DDL participates in transactions (drives apply strategy)
     transactional_ddl: bool = False
+
+    #: the engine's implicit schema — an unqualified repo object maps here (used by drift
+    #: matching so repo `kunde` aligns with live `public.kunde` / `dbo.kunde`).
+    default_schema: str | None = None
 
     def __init__(self, cfg: ConnectionConfig):
         self.cfg = cfg
@@ -52,6 +56,11 @@ class Adapter(abc.ABC):
         Indexes and sequences have no ``CREATE OR REPLACE`` form on most engines, so they
         are created only when absent.
         """
+
+    @abc.abstractmethod
+    def inventory(self) -> list[LiveObject]:
+        """Read-only live inventory of user objects across kinds, for drift detection
+        (``dbly check``). Procedural/definitional objects carry a canonical source hash."""
 
     # --- dialect-specific DDL generation -----------------------------------------------
     @abc.abstractmethod
