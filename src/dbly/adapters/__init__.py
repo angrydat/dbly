@@ -8,6 +8,7 @@ from dbly.engine import detect_dialect
 _POSTGRES = {"postgres", "postgresql", "pg"}
 _SQLITE = {"sqlite", "sqlite3"}
 _MSSQL = {"sqlserver", "mssql", "ms-sql"}
+_ORACLE = {"oracle"}
 
 
 def get_adapter(cfg: ConnectionConfig) -> Adapter:
@@ -24,9 +25,11 @@ def get_adapter(cfg: ConnectionConfig) -> Adapter:
         from dbly.adapters.mssql import MssqlAdapter
 
         return MssqlAdapter(cfg)
-    raise NotImplementedError(
-        f"adapter for {env!r} not implemented yet — Oracle follows (CONCEPT.md §16)."
-    )
+    if env in _ORACLE:
+        from dbly.adapters.oracle import OracleAdapter
+
+        return OracleAdapter(cfg)
+    raise NotImplementedError(f"no adapter for environment {env!r}.")
 
 
 __all__ = ["Adapter", "Column", "get_adapter"]
