@@ -9,6 +9,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
+from dbly.model import ObjectId
 
 _STATE_DDL = """
 CREATE TABLE IF NOT EXISTS dbly_state (
@@ -39,6 +40,14 @@ class PostgresAdapter(Adapter):
             )
             for c in cols
         ]
+
+    def add_column_sql(self, table: ObjectId, col: Column) -> str:
+        parts = [f"ALTER TABLE {table} ADD COLUMN {col.name} {col.type}"]
+        if not col.nullable:
+            parts.append("NOT NULL")
+        if col.default is not None:
+            parts.append(f"DEFAULT {col.default}")
+        return " ".join(parts) + ";"
 
     def apply(self, statements: list[str]) -> None:
         # transactional DDL → one atomic transaction

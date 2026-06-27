@@ -12,9 +12,7 @@ from dbly import parsing
 from dbly.adapters.base import Adapter
 from dbly.model import (
     ChangeType,
-    Column,
     ObjectClass,
-    ObjectId,
     ObjectKind,
     ParsedObject,
     Plan,
@@ -98,7 +96,7 @@ def _plan_table(adapter: Adapter, plan: Plan, obj: ParsedObject, dialect: str | 
                     object_id=obj.id,
                     kind=ObjectKind.TABLE,
                     severity=Severity.DESTRUCTIVE,
-                    sql=_alter_add_column(obj.id, col, dialect),
+                    sql=adapter.add_column_sql(obj.id, col),
                     source_file=obj.source_file,
                     note="NOT NULL without default on existing table — unsafe",
                 )
@@ -114,7 +112,7 @@ def _plan_table(adapter: Adapter, plan: Plan, obj: ParsedObject, dialect: str | 
                     object_id=obj.id,
                     kind=ObjectKind.TABLE,
                     severity=Severity.ADDITIVE,
-                    sql=_alter_add_column(obj.id, col, dialect),
+                    sql=adapter.add_column_sql(obj.id, col),
                     source_file=obj.source_file,
                 )
             )
@@ -126,15 +124,6 @@ def _plan_table(adapter: Adapter, plan: Plan, obj: ParsedObject, dialect: str | 
                 f"{obj.id}.{col.name}: present in DB, absent from desired CREATE TABLE — "
                 "potential DROP COLUMN (not auto-applied; use an explicit ALTER)"
             )
-
-
-def _alter_add_column(table: ObjectId, col: Column, dialect: str | None) -> str:
-    parts = [f"ALTER TABLE {table} ADD COLUMN {col.name} {col.type}"]
-    if not col.nullable:
-        parts.append("NOT NULL")
-    if col.default is not None:
-        parts.append(f"DEFAULT {col.default}")
-    return " ".join(parts) + ";"
 
 
 def _plan_deletion(

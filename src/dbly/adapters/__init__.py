@@ -7,6 +7,7 @@ from dbly.engine import detect_dialect
 
 _POSTGRES = {"postgres", "postgresql", "pg"}
 _SQLITE = {"sqlite", "sqlite3"}
+_MSSQL = {"sqlserver", "mssql", "ms-sql"}
 
 
 def get_adapter(cfg: ConnectionConfig) -> Adapter:
@@ -19,9 +20,12 @@ def get_adapter(cfg: ConnectionConfig) -> Adapter:
         from dbly.adapters.sqlite import SqliteAdapter
 
         return SqliteAdapter(cfg)
+    if env in _MSSQL:
+        from dbly.adapters.mssql import MssqlAdapter
+
+        return MssqlAdapter(cfg)
     raise NotImplementedError(
-        f"adapter for {env!r} not implemented yet — Postgres first (CONCEPT.md §16). "
-        "SQL Server and Oracle follow."
+        f"adapter for {env!r} not implemented yet — Oracle follows (CONCEPT.md §16)."
     )
 
 

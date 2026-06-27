@@ -17,7 +17,7 @@ from sqlalchemy import Engine
 
 from dbly.config import ConnectionConfig
 from dbly.engine import make_engine
-from dbly.model import Column
+from dbly.model import Column, ObjectId
 
 __all__ = ["Adapter", "Column"]
 
@@ -44,6 +44,15 @@ class Adapter(abc.ABC):
 
     @abc.abstractmethod
     def get_columns(self, schema: str | None, name: str) -> list[Column]: ...
+
+    # --- dialect-specific DDL generation -----------------------------------------------
+    @abc.abstractmethod
+    def add_column_sql(self, table: ObjectId, col: Column) -> str:
+        """Generate the additive ``ALTER TABLE … ADD`` for this dialect.
+
+        Postgres/SQLite use ``ADD COLUMN``; T-SQL uses ``ADD``. The planner stays
+        dialect-agnostic and delegates the rendering here.
+        """
 
     # --- execution ---------------------------------------------------------------------
     @abc.abstractmethod
