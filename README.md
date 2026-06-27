@@ -1,51 +1,95 @@
-# dbly
+<p align="center">
+  <img src="docs/dbly_head.png" alt="dbly — state-based database deployment" width="100%">
+</p>
 
-**State-based, cross-engine database deployment** — git-driven, parser-assisted, SQL-first.
+<p align="center"><b>Declare your desired database state in git. dbly makes it real.</b></p>
 
-dbly deploys the *desired state* of your database objects (one file per object, versioned in
-git like any source) to PostgreSQL, SQL Server, Oracle and SQLite. It is the deployment
-sibling of [dbression](https://github.com/angrydat/dbression) (which tests): one applies, one
-verifies.
+---
 
-> Design rationale and the full model live in [`CONCEPT.md`](../_SYS/dbly/CONCEPT.md).
+**dbly** deploys your database objects — tables, views, functions, procedures, packages,
+triggers, grants — from version control to **PostgreSQL, SQL Server, Oracle and SQLite**.
+You keep one SQL file per object, like normal source code; dbly works out what changed and
+brings the target database in sync. Think *Terraform for your database*: **declarative,
+predictable, repeatable.**
 
-## How it works — three layers
+## Why
 
-| Layer | Tool | Answers |
-|---|---|---|
-| change detection | `git diff` | *which files* changed since the deployed ref |
-| semantics | `sqlglot` | *what* they are — kind, identity, dependencies |
-| reality | live introspection | what the *target database* actually looks like |
-
-Objects fall into two classes:
-
-* **Replaceable** (views, functions, procedures, packages, triggers, types, grants) →
-  re-applied wholesale (`CREATE OR REPLACE`), dependency-ordered. Idempotent.
-* **Stateful** (tables) → desired `CREATE TABLE` diffed against the live schema; **additive**
-  deltas generated automatically, **destructive** deltas flagged and never auto-applied.
+- **Declarative** — your repo is the source of truth. No hand-written migration chains, no
+  version-number collisions on parallel branches.
+- **Plan before apply** — preview exactly what will run, then execute. No surprises.
+- **Idempotent & safe** — only the necessary changes are applied. Additive changes go
+  automatically; destructive ones (dropping columns, etc.) are flagged and never run unless
+  you explicitly allow them.
+- **Multi-database** — one workflow across all four engines.
 
 ## Install
 
 ```sh
-uv sync                      # dev / from source
-# Postgres driver is included; add engines as needed:
-uv sync --extra oracle       # oracledb
-uv sync --extra mssql        # pymssql
+uv sync                 # PostgreSQL + SQLite work out of the box
+uv sync --extra oracle  # add the Oracle driver
+uv sync --extra mssql   # add the SQL Server driver
+uv sync --extra all     # both
 ```
 
-## Usage
+## Organize your repo
+
+One file per object; folder names map to database schemas. Use any extension you like
+(`.sql`, `.tbl`, `.vw`, `.prc`, …) — dbly reads the SQL to know what each object is.
+
+```
+db/
+  sales/
+    customer.tbl
+    v_open_orders.vw
+    grants.sql
+  init/                 # optional: privileged greenfield groundwork (CREATE DATABASE/ROLE…)
+hooks/pre/  hooks/post/  # optional: .sql or .py hooks (e.g. ArcGIS/ArcPy steps)
+.dbignore               # files in the repo that should not be deployed
+```
+
+## Connect
+
+A connection profile (reuses the familiar `connection.properties` format):
+
+```properties
+environment=postgres            # postgres | sqlserver | oracle | sqlite
+service=db.example.com:5432
+username=app
+password=${DB_PASSWORD}         # ${ENV} placeholders → keep secrets out of the repo (CI/CD-safe)
+database=appdb
+```
+
+## Use
 
 ```sh
-dbly plan  --to <release-tag> --target prod.properties        # review the plan
-dbly apply --to <release-tag> --target prod.properties        # execute it
-dbly status --target prod.properties                          # show deployed ref
-dbly check  --target prod.properties                          # detect drift
+# preview the changes between the deployed state and a git ref
+dbly plan  --to main --target prod.connection.properties
+
+# apply them
+dbly apply --to main --target prod.connection.properties
+
+# export a plain SQL script to run by hand (e.g. through a customer VPN, no dbly needed)
+dbly plan  --to main --target prod.connection.properties --sql deploy.sql
+
+# what is currently deployed?
+dbly status --target prod.connection.properties
+
+# has the database drifted from the desired state?
+dbly check  --target prod.connection.properties
+
+# greenfield only: run privileged groundwork once under a superuser profile
+dbly init   --init-target super.connection.properties
 ```
 
-Connection profiles reuse dbression's DBFit-compatible `connection.properties`. `${ENV}`
-placeholders keep credentials out of the repo (CI/CD-safe). A target can also come entirely
-from `DBLY_TARGET` / `DBLY_CONNECTION_STRING` + `DBLY_ENVIRONMENT`.
+**Typical workflow:** edit your object files → commit → `dbly plan` to review → `dbly apply`.
+
+Deploying a *subset* of features is just choosing the git ref you deploy (a release tag or
+branch). Destructive steps require `--allow-destructive`.
 
 ## Status
 
-Early alpha. **Postgres adapter first** (the *Leitstern*); SQL Server and Oracle follow.
+Early alpha — all four engines are implemented and tested against live databases.
+
+## License
+
+MIT
