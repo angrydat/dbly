@@ -23,4 +23,5 @@ htmlcov/
 
 # Local secrets / connection profiles with credentials
 *.local.properties
+*.connection.properties
 secrets/
