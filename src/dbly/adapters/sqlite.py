@@ -9,7 +9,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
-from dbly.model import ObjectId
+from dbly.model import ObjectId, ObjectKind
 
 _STATE_DDL = """
 CREATE TABLE IF NOT EXISTS dbly_state (
@@ -38,6 +38,16 @@ class SqliteAdapter(Adapter):
             )
             for c in cols
         ]
+
+    def has_object(self, kind: ObjectKind, schema: str | None, name: str) -> bool:
+        if kind is ObjectKind.SEQUENCE:
+            return False  # SQLite has no sequences
+        if kind is ObjectKind.INDEX:
+            q = "SELECT 1 FROM sqlite_master WHERE type='index' AND name=:n"
+        else:
+            q = "SELECT 1 FROM sqlite_master WHERE name=:n"
+        with self.engine.connect() as conn:
+            return conn.execute(text(q), {"n": name}).first() is not None
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         # SQLite has no schemas; ignore the schema qualifier.

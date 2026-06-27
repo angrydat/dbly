@@ -47,6 +47,8 @@ def _kind_from_expression(e: exp.Expression) -> ObjectKind | None:
             "PACKAGE": ObjectKind.PACKAGE,
             "TRIGGER": ObjectKind.TRIGGER,
             "TYPE": ObjectKind.TYPE,
+            "INDEX": ObjectKind.INDEX,
+            "SEQUENCE": ObjectKind.SEQUENCE,
         }
         return mapping.get(kind, ObjectKind.UNKNOWN)
     if isinstance(e, exp.Grant):
@@ -55,6 +57,14 @@ def _kind_from_expression(e: exp.Expression) -> ObjectKind | None:
 
 
 def _identity(e: exp.Expression, default_schema: str | None) -> ObjectId:
+    # An index's name lives in the Index node; its schema follows the indexed table
+    # (e.find(exp.Table) would otherwise return the *indexed table*, not the index).
+    if isinstance(e, exp.Create) and (e.args.get("kind") or "").upper() == "INDEX":
+        idx = e.find(exp.Index)
+        name = idx.this.name if idx is not None and idx.this is not None else "unknown"
+        tbl = e.find(exp.Table)
+        schema = (tbl.db if tbl is not None else None) or default_schema
+        return ObjectId(schema=schema or None, name=name)
     table = e.find(exp.Table)
     if table is not None:
         schema = table.db or default_schema

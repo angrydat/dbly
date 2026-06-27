@@ -24,7 +24,7 @@ import re
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
-from dbly.model import ObjectId
+from dbly.model import ObjectId, ObjectKind
 
 _SLASH_RE = re.compile(r"(?m)^\s*/\s*$")
 _PLSQL_RE = re.compile(
@@ -102,6 +102,19 @@ class OracleAdapter(Adapter):
             )
             for c in cols
         ]
+
+    def has_object(self, kind: ObjectKind, schema: str | None, name: str) -> bool:
+        n = name.upper()
+        s = schema.upper() if schema else None
+        if kind is ObjectKind.INDEX:
+            q = "SELECT 1 FROM all_indexes WHERE index_name = :n AND (:s IS NULL OR owner = :s)"
+        elif kind is ObjectKind.SEQUENCE:
+            q = ("SELECT 1 FROM all_sequences "
+                 "WHERE sequence_name = :n AND (:s IS NULL OR sequence_owner = :s)")
+        else:
+            q = "SELECT 1 FROM all_objects WHERE object_name = :n AND (:s IS NULL OR owner = :s)"
+        with self.engine.connect() as conn:
+            return conn.execute(text(q), {"n": n, "s": s}).first() is not None
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         parts = [f"ALTER TABLE {table} ADD {col.name} {col.type}"]

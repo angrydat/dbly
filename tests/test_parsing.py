@@ -24,6 +24,27 @@ def test_table_is_stateful():
     assert obj.object_class is ObjectClass.STATEFUL
 
 
+def test_index_identity_and_classification():
+    sql = "CREATE INDEX ix_kunde_name ON sales.kunde (name);"
+    obj = parsing.parse_file(sql, Path("sales/ix_kunde_name.sql"), dialect="postgres")[0]
+    assert obj.kind is ObjectKind.INDEX
+    assert obj.object_class is ObjectClass.STATEFUL          # not blindly re-applied
+    assert obj.id.name == "ix_kunde_name"                    # index name, not the table
+    assert obj.id.schema == "sales"                          # follows the indexed table
+    assert "sales.kunde" in obj.depends_on                   # depends on the indexed table
+
+
+def test_sequence_identity_and_classification():
+    obj = parsing.parse_file(
+        "CREATE SEQUENCE sales.order_seq START 1;", Path("sales/order_seq.sql"),
+        dialect="postgres",
+    )[0]
+    assert obj.kind is ObjectKind.SEQUENCE
+    assert obj.object_class is ObjectClass.STATEFUL
+    assert obj.id.name == "order_seq"
+    assert obj.id.schema == "sales"
+
+
 def test_default_schema_hint_applies_when_unqualified():
     sql = "CREATE VIEW v_x AS SELECT 1;"
     obj = parsing.parse_file(sql, Path("app/v_x.vw"), default_schema="app", dialect="postgres")[0]

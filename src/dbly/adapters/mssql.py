@@ -19,7 +19,7 @@ import re
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
-from dbly.model import ObjectId
+from dbly.model import ObjectId, ObjectKind
 
 _GO_RE = re.compile(r"^\s*GO\s*$", re.IGNORECASE | re.MULTILINE)
 
@@ -53,6 +53,25 @@ class MssqlAdapter(Adapter):
             )
             for c in cols
         ]
+
+    def has_object(self, kind: ObjectKind, schema: str | None, name: str) -> bool:
+        with self.engine.connect() as conn:
+            if kind is ObjectKind.INDEX:
+                # index names are unique per table, not globally — best-effort by name
+                return conn.execute(
+                    text("SELECT TOP 1 1 FROM sys.indexes WHERE name = :n"), {"n": name}
+                ).first() is not None
+            if kind is ObjectKind.SEQUENCE:
+                return conn.execute(
+                    text(
+                        "SELECT 1 FROM sys.sequences s "
+                        "JOIN sys.schemas c ON c.schema_id = s.schema_id "
+                        "WHERE s.name = :n AND (:s IS NULL OR c.name = :s)"
+                    ),
+                    {"n": name, "s": schema},
+                ).first() is not None
+            qname = f"{schema}.{name}" if schema else name
+            return conn.execute(text("SELECT OBJECT_ID(:q)"), {"q": qname}).scalar() is not None
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         # T-SQL: ADD, not ADD COLUMN

@@ -17,7 +17,7 @@ from sqlalchemy import Engine
 
 from dbly.config import ConnectionConfig
 from dbly.engine import make_engine
-from dbly.model import Column, ObjectId
+from dbly.model import Column, ObjectId, ObjectKind
 
 __all__ = ["Adapter", "Column"]
 
@@ -44,6 +44,14 @@ class Adapter(abc.ABC):
 
     @abc.abstractmethod
     def get_columns(self, schema: str | None, name: str) -> list[Column]: ...
+
+    @abc.abstractmethod
+    def has_object(self, kind: ObjectKind, schema: str | None, name: str) -> bool:
+        """Existence check for a non-table object (used for index/sequence create-if-missing).
+
+        Indexes and sequences have no ``CREATE OR REPLACE`` form on most engines, so they
+        are created only when absent.
+        """
 
     # --- dialect-specific DDL generation -----------------------------------------------
     @abc.abstractmethod

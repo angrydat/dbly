@@ -7,7 +7,7 @@ from pathlib import Path
 from dbly import initializer
 from dbly.adapters.sqlite import SqliteAdapter
 from dbly.config import ConnectionConfig
-from dbly.model import Severity
+from dbly.model import ObjectKind, Severity
 from dbly.planner import build_plan
 from dbly.repo import Repo
 
@@ -80,6 +80,36 @@ def test_bootstrap_then_additive_upgrade(tmp_path: Path):
     adapter.apply([s.sql for s in plan2.steps])
     cols = {c.name.lower() for c in adapter.get_columns(None, "kunde")}
     assert "email" in cols
+    adapter.dispose()
+
+
+def test_index_is_created_once_then_skipped(tmp_path: Path):
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text(
+        "CREATE TABLE IF NOT EXISTS kunde (id INTEGER, name TEXT);", encoding="utf-8"
+    )
+    (repo_root / "ix_kunde_name.sql").write_text(
+        "CREATE INDEX ix_kunde_name ON kunde (name);", encoding="utf-8"
+    )
+    ref = _commit(repo_root, "v1")
+
+    db = tmp_path / "idx.db"
+    cfg = ConnectionConfig(environment="sqlite", service=str(db))
+    repo = Repo(repo_root)
+    adapter = SqliteAdapter(cfg)
+
+    plan = build_plan(repo, adapter, from_ref=None, to_ref=ref,
+                      target="sqlite", dialect="sqlite")
+    assert any(s.kind.value == "index" for s in plan.steps)  # index planned
+    adapter.apply([s.sql for s in plan.steps])
+    assert adapter.has_object(ObjectKind.INDEX, None, "ix_kunde_name")
+
+    # re-plan against the same ref but with the live DB: index already exists → not replanned
+    plan2 = build_plan(repo, adapter, from_ref=None, to_ref=ref,
+                       target="sqlite", dialect="sqlite")
+    assert not any(s.kind.value == "index" for s in plan2.steps)
     adapter.dispose()
 
 

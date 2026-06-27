@@ -12,7 +12,6 @@ from dbly import parsing
 from dbly.adapters.base import Adapter
 from dbly.model import (
     ChangeType,
-    ObjectClass,
     ObjectKind,
     ParsedObject,
     Plan,
@@ -34,6 +33,11 @@ def build_plan(
     plan = Plan(target=target, from_ref=from_ref, to_ref=to_ref)
     changes = repo.changed_files(from_ref, to_ref)
 
+    # Bucket by kind so the plan is emitted in dependency-safe order regardless of file
+    # order: sequences → tables → indexes → replaceable (views/functions/…).
+    sequences: list[ParsedObject] = []
+    tables: list[ParsedObject] = []
+    indexes: list[ParsedObject] = []
     replaceable: list[ParsedObject] = []
     for fc in changes:
         if fc.change_type is ChangeType.DELETED:
@@ -41,14 +45,22 @@ def build_plan(
             continue
         sql = repo.read_at(to_ref, fc.path)
         schema_hint = repo.schema_for(fc.path)
-        objects = parsing.parse_file(
-            sql, fc.path, default_schema=schema_hint, dialect=dialect
-        )
-        for obj in objects:
-            if obj.object_class is ObjectClass.STATEFUL:
-                _plan_table(adapter, plan, obj, dialect)
+        for obj in parsing.parse_file(sql, fc.path, default_schema=schema_hint, dialect=dialect):
+            if obj.kind is ObjectKind.SEQUENCE:
+                sequences.append(obj)
+            elif obj.kind is ObjectKind.TABLE:
+                tables.append(obj)
+            elif obj.kind is ObjectKind.INDEX:
+                indexes.append(obj)
             else:
                 replaceable.append(obj)
+
+    for obj in sequences:
+        _plan_create_if_missing(adapter, plan, obj)
+    for obj in tables:
+        _plan_table(adapter, plan, obj, dialect)
+    for obj in indexes:
+        _plan_create_if_missing(adapter, plan, obj)
 
     # replaceable objects: dependency-ordered, re-applied wholesale
     for obj in parsing.topological_order(replaceable):
@@ -63,6 +75,26 @@ def build_plan(
             )
         )
     return plan
+
+
+def _plan_create_if_missing(adapter: Adapter, plan: Plan, obj: ParsedObject) -> None:
+    """Indexes/sequences: CREATE only when absent (no idempotent CREATE OR REPLACE form).
+
+    A *changed* definition is not detected here (that surfaces as drift in `dbly check`);
+    re-creating would need an explicit drop, which is destructive and left to the human.
+    """
+    if adapter.has_object(obj.kind, obj.id.schema, obj.id.name):
+        return
+    plan.steps.append(
+        Step(
+            title=f"create {obj.kind.value} {obj.id}",
+            object_id=obj.id,
+            kind=obj.kind,
+            severity=Severity.ADDITIVE,
+            sql=obj.sql if obj.sql.strip().endswith(";") else obj.sql + ";",
+            source_file=obj.source_file,
+        )
+    )
 
 
 def _plan_table(adapter: Adapter, plan: Plan, obj: ParsedObject, dialect: str | None) -> None:

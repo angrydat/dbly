@@ -9,7 +9,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, text
 
 from dbly.adapters.base import Adapter, Column
-from dbly.model import ObjectId
+from dbly.model import ObjectId, ObjectKind
 
 _STATE_DDL = """
 CREATE TABLE IF NOT EXISTS dbly_state (
@@ -40,6 +40,21 @@ class PostgresAdapter(Adapter):
             )
             for c in cols
         ]
+
+    def has_object(self, kind: ObjectKind, schema: str | None, name: str) -> bool:
+        qname = f"{schema}.{name}" if schema else name
+        with self.engine.connect() as conn:
+            if kind in (ObjectKind.INDEX, ObjectKind.SEQUENCE, ObjectKind.TABLE, ObjectKind.VIEW):
+                return conn.execute(
+                    text("SELECT to_regclass(:q)"), {"q": qname}
+                ).scalar() is not None
+            return conn.execute(
+                text(
+                    "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE p.proname = :n AND (:s IS NULL OR n.nspname = :s) LIMIT 1"
+                ),
+                {"n": name, "s": schema},
+            ).first() is not None
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         parts = [f"ALTER TABLE {table} ADD COLUMN {col.name} {col.type}"]

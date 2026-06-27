@@ -30,11 +30,19 @@ class ObjectKind(str, Enum):
     TRIGGER = "trigger"
     TYPE = "type"
     GRANT = "grant"
+    INDEX = "index"
+    SEQUENCE = "sequence"
     UNKNOWN = "unknown"
 
     @property
     def object_class(self) -> ObjectClass:
-        return ObjectClass.STATEFUL if self is ObjectKind.TABLE else ObjectClass.REPLACEABLE
+        # Stateful objects are never blindly re-applied: tables get an additive column
+        # diff; indexes/sequences are created only when missing (CREATE is not idempotent
+        # and has no CREATE OR REPLACE form on most engines).
+        return ObjectClass.STATEFUL if self in _STATEFUL_KINDS else ObjectClass.REPLACEABLE
+
+
+_STATEFUL_KINDS = {ObjectKind.TABLE, ObjectKind.INDEX, ObjectKind.SEQUENCE}
 
 
 @dataclass(slots=True)
