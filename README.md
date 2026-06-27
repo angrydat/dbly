@@ -86,6 +86,22 @@ dbly init   --init-target super.connection.properties
 Deploying a *subset* of features is just choosing the git ref you deploy (a release tag or
 branch). Destructive steps require `--allow-destructive`.
 
+## Built for trunk-based development
+
+Database teams are usually locked out of trunk-based development: migration scripts collide
+on parallel branches, and "merge" effectively means "deploy to the customer". dbly is
+designed to break that deadlock for teams who write their logic **in SQL, in the database**:
+
+- **No migration numbers, no collisions.** Two developers edit different objects — git
+  merges them like any other code. Integrate early, every day.
+- **Merge ≠ deploy.** The trunk is your desired state; `dbly apply --to <tag>` ships the ref
+  you choose, in the maintenance window you choose. Release *what* you want, *when* you want.
+- **One trunk, every customer.** dbly reads each database's real state, so customers on
+  different versions are no problem.
+
+Integrate continuously, deploy on your own schedule — trunk-based development, finally
+practical for state-based database developers.
+
 ## Status
 
 Early alpha — all four engines are implemented and tested against live databases.
