@@ -44,6 +44,15 @@ class SqliteAdapter(Adapter):
                 if stmt.strip():
                     conn.execute(text(stmt))
 
+    def run_init_script(self, script: str) -> None:
+        # sqlite3's executescript handles multiple statements and auto-commits.
+        raw = self.engine.raw_connection()
+        try:
+            raw.driver_connection.executescript(script)
+            raw.commit()
+        finally:
+            raw.close()
+
     def state_table_ddl(self) -> str:
         return _STATE_DDL.strip() + ";"
 

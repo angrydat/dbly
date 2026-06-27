@@ -14,7 +14,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from dbly import __version__, hooks, report
+from dbly import __version__, hooks, initializer, report
 from dbly.adapters import get_adapter
 from dbly.config import resolve_target
 from dbly.engine import detect_dialect
@@ -154,6 +154,34 @@ def apply(
         adapter.dispose()
     console.print(f"[green]applied[/green] {len(statements)} step(s); "
                   f"deployed ref → {plan_obj.to_ref}")
+
+
+@app.command()
+def init(
+    init_target: str = typer.Option(
+        ..., "--init-target",
+        help="privileged connection profile (superuser / maintenance DB).",
+    ),
+    repo_path: Path = typer.Option(Path("."), "--repo"),
+    init_dir: str = typer.Option("init", "--dir", help="folder of ordered init SQL scripts."),
+) -> None:
+    """Run privileged greenfield groundwork (CREATE DATABASE/ROLE/EXTENSION).
+
+    Greenfield only — brownfield (a handed-over database) skips this entirely.
+    """
+    repo = Repo(repo_path)
+    scripts = initializer.discover_init_scripts(repo.root, init_dir)
+    if not scripts:
+        console.print(f"[yellow]no init scripts in {init_dir}/ — nothing to do.[/yellow]")
+        return
+    adapter = get_adapter(resolve_target(init_target))
+    try:
+        for s in scripts:
+            adapter.run_init_script(s.read_text(encoding="utf-8"))
+            console.print(f"[green]ran[/green] {init_dir}/{s.name}")
+    finally:
+        adapter.dispose()
+    console.print(f"[green]init complete[/green] — {len(scripts)} script(s).")
 
 
 @app.command()

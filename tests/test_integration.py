@@ -4,6 +4,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from dbly import initializer
 from dbly.adapters.sqlite import SqliteAdapter
 from dbly.config import ConnectionConfig
 from dbly.model import Severity
@@ -79,4 +80,29 @@ def test_bootstrap_then_additive_upgrade(tmp_path: Path):
     adapter.apply([s.sql for s in plan2.steps])
     cols = {c.name.lower() for c in adapter.get_columns(None, "kunde")}
     assert "email" in cols
+    adapter.dispose()
+
+
+def test_init_runs_ordered_multistatement_scripts(tmp_path: Path):
+    repo_root = tmp_path / "db"
+    (repo_root / "init").mkdir(parents=True)
+    # multi-statement script + ordering by filename prefix
+    (repo_root / "init" / "01_schema.sql").write_text(
+        "CREATE TABLE meta (k TEXT);\nINSERT INTO meta (k) VALUES ('init');", encoding="utf-8"
+    )
+    (repo_root / "init" / "02_more.sql").write_text(
+        "CREATE TABLE audit (id INTEGER);", encoding="utf-8"
+    )
+    _init_repo(repo_root)  # discovery reads the working tree, but keep it a real repo
+
+    scripts = initializer.discover_init_scripts(repo_root)
+    assert [p.name for p in scripts] == ["01_schema.sql", "02_more.sql"]
+
+    db = tmp_path / "init.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    for s in scripts:
+        adapter.run_init_script(s.read_text(encoding="utf-8"))
+
+    assert adapter.table_exists(None, "meta")
+    assert adapter.table_exists(None, "audit")
     adapter.dispose()

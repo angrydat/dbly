@@ -50,6 +50,15 @@ class Adapter(abc.ABC):
     def apply(self, statements: list[str]) -> None:
         """Execute statements with the engine's appropriate transaction strategy."""
 
+    @abc.abstractmethod
+    def run_init_script(self, script: str) -> None:
+        """Run a privileged init script (CONCEPT.md §6) verbatim.
+
+        Init scripts are imperative groundwork — possibly multi-statement and containing
+        statements that cannot run inside a transaction (e.g. Postgres ``CREATE DATABASE``).
+        Implementations therefore run in **autocommit** and accept the whole script.
+        """
+
     # --- state ledger ------------------------------------------------------------------
     @abc.abstractmethod
     def ensure_state_table(self) -> None: ...

@@ -47,6 +47,13 @@ class PostgresAdapter(Adapter):
                 if stmt.strip():
                     conn.execute(text(stmt))
 
+    def run_init_script(self, script: str) -> None:
+        # autocommit: CREATE DATABASE & friends cannot run inside a transaction block.
+        # psycopg3 executes a multi-statement string in a single exec_driver_sql call.
+        with self.engine.connect() as conn:
+            conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+            conn.exec_driver_sql(script)
+
     def state_table_ddl(self) -> str:
         return _STATE_DDL.strip() + ";"
 
