@@ -1,0 +1,53 @@
+name: Publish to PyPI
+
+# Triggered when a GitHub Release is published. Tag the release with
+# the version (e.g. `v0.1.0`) — the workflow builds wheel + sdist and
+# publishes via PyPI Trusted Publishing (OIDC, no API token).
+#
+# One-time setup on PyPI (Trusted Publisher), with these values:
+#   * PyPI Project name: dbly
+#   * Owner:             angrydat
+#   * Repository name:   dbly
+#   * Workflow name:     publish.yml
+#   * Environment:       pypi
+# For the FIRST release (project does not exist on PyPI yet) add a *pending*
+# publisher at https://pypi.org/manage/account/publishing/ — the first publish
+# then creates the project. Afterwards manage it under
+#   https://pypi.org/manage/project/dbly/settings/publishing/
+on:
+  release:
+    types: [published]
+
+  # Allow manual runs for emergencies / re-publishes from a tag.
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/dbly
+    permissions:
+      id-token: write  # required for Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          verify-metadata: true
