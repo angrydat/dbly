@@ -1,0 +1,97 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Trunk-based-development gate for a dbly-managed *database* repository.
+#
+# Place this at the ROOT of the repo that holds your SQL object files (not the
+# dbly repo itself). On every change it proves — against a throwaway Postgres —
+# that the trunk is always deployable and green:
+#
+#   • GREENFIELD : the trunk builds a correct database from scratch
+#   • UPGRADE    : the path from the released baseline (main) applies cleanly
+#   • BEHAVIOUR  : the dbression regression suite passes
+#
+# That is exactly the guarantee trunk-based development needs. No secrets live in
+# the repo — CI spins up an ephemeral database and writes the connection at runtime.
+# ─────────────────────────────────────────────────────────────────────────────
+
+image: python:3.12-slim
+
+clone:
+  depth: full            # dbly diffs git refs (origin/main..HEAD) — needs history
+
+definitions:
+  services:
+    postgres:
+      image: postgres:16
+      variables:
+        POSTGRES_DB: ci
+        POSTGRES_USER: ci
+        POSTGRES_PASSWORD: ci
+
+pipelines:
+  # Every feature branch: prove it is integrable AND deployable from scratch.
+  branches:
+    '**':
+      - step:
+          name: "dbly · trunk is deployable + green (greenfield)"
+          services: [postgres]
+          script:
+            - pip install -q uv
+            - uv tool install "git+https://github.com/angrydat/dbly@main"
+            - uv tool install dbression
+            # one profile for BOTH dbly (--target) and dbression (auto-discovered)
+            - |
+              cat > connection.properties <<'EOF'
+              environment=postgres
+              connection-string=postgresql://ci:ci@127.0.0.1:5432/ci
+              EOF
+            # empty DB → `apply` bootstraps the full desired state
+            - dbly apply --to HEAD --target connection.properties
+            # desired state must now equal the live DB (no drift)
+            - dbly check --to HEAD --target connection.properties
+            # behaviour gate — JUnit feeds Bitbucket's test report (adjust the path)
+            - dbression run ./tests --junit-xml test-reports/dbression.xml
+
+  # Pull requests into main: also prove the UPGRADE path from production baseline.
+  pull-requests:
+    '**':
+      - step:
+          name: "dbly · upgrade path from main applies cleanly"
+          services: [postgres]
+          script:
+            - pip install -q uv
+            - uv tool install "git+https://github.com/angrydat/dbly@main"
+            - uv tool install dbression
+            - git fetch origin main:refs/remotes/origin/main
+            - |
+              cat > connection.properties <<'EOF'
+              environment=postgres
+              connection-string=postgresql://ci:ci@127.0.0.1:5432/ci
+              EOF
+            # 1) build the released baseline (production state == main)
+            - dbly apply --to origin/main --target connection.properties
+            # 2) review the upgrade — gate here if destructive steps appear
+            - dbly plan  --from origin/main --to HEAD --target connection.properties
+            # 3) apply the upgrade and re-check behaviour on the upgraded DB
+            - dbly apply --from origin/main --to HEAD --target connection.properties
+            - dbression run ./tests --junit-xml test-reports/dbression.xml
+
+  # On a release tag: emit the hand-deploy SQL as a downloadable artifact.
+  tags:
+    'v*':
+      - step:
+          name: "dbly · build hand-deploy SQL for the maintenance window"
+          services: [postgres]
+          script:
+            - pip install -q uv
+            - uv tool install "git+https://github.com/angrydat/dbly@main"
+            - |
+              cat > connection.properties <<'EOF'
+              environment=postgres
+              connection-string=postgresql://ci:ci@127.0.0.1:5432/ci
+              EOF
+            # NOTE: for an accurate additive table-diff, point --target at a *copy of
+            # production* (read access). Against an empty CI DB this yields the full
+            # bootstrap script instead.
+            - dbly plan --to "$BITBUCKET_TAG" --target connection.properties --sql "deploy-$BITBUCKET_TAG.sql"
+          artifacts:
+            - "deploy-*.sql"

@@ -1,0 +1,49 @@
+# GitHub Actions variant of the dbly trunk-based-development gate.
+# Place at .github/workflows/dbly.yml in your *database* repo.
+# Greenfield + behaviour on every push; upgrade path on pull requests.
+
+name: dbly trunk gate
+
+on: [push, pull_request]
+
+jobs:
+  deployable:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ci
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # dbly diffs git refs — needs full history
+      - uses: astral-sh/setup-uv@v5
+      - run: uv tool install "git+https://github.com/angrydat/dbly@main"
+      - run: uv tool install dbression
+      - run: |
+          cat > connection.properties <<'EOF'
+          environment=postgres
+          connection-string=postgresql://ci:ci@127.0.0.1:5432/ci
+          EOF
+
+      - name: Greenfield — trunk builds a correct DB from scratch
+        run: |
+          dbly apply --to HEAD --target connection.properties
+          dbly check --to HEAD --target connection.properties
+
+      - name: Upgrade path from main (pull requests only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin main
+          # fresh DB instance recommended; here we just validate the plan is clean
+          dbly plan --from origin/main --to HEAD --target connection.properties
+
+      - name: Behaviour gate (dbression)
+        run: dbression run ./tests --junit-xml test-reports/dbression.xml
