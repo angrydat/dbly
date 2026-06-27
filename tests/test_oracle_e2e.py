@@ -37,9 +37,11 @@ GUARD_NAMES = (TBL, VW, "DBLY_STATE")
 
 
 def _drop(obj_type: str, name: str) -> str:
-    # guarded drop: ignore ORA-00942 (object does not exist)
+    # guarded drop (ignore ORA-00942). PURGE on tables so nothing lingers in the recyclebin
+    # (an Oracle DROP TABLE without PURGE also leaves the identity ISEQ$$ sequence behind).
+    purge = " PURGE" if obj_type == "TABLE" else ""
     return (
-        f"BEGIN EXECUTE IMMEDIATE 'DROP {obj_type} {name}'; "
+        f"BEGIN EXECUTE IMMEDIATE 'DROP {obj_type} {name}{purge}'; "
         f"EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;\n/\n"
     )
 
