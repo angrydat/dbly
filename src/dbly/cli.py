@@ -137,7 +137,7 @@ def apply(
         s.sql for s in plan_obj.steps
         if allow_destructive or s.severity is not Severity.DESTRUCTIVE
     ]
-    if not statements:
+    if not statements and not plan_obj.migrations and not plan_obj.baselined:
         console.print("[green]nothing to apply.[/green]")
         return
 
@@ -147,13 +147,24 @@ def apply(
     try:
         _run_hooks(repo, "pre", py_interpreter)
         adapter.ensure_state_table()
-        adapter.apply(statements)
+        # baseline (bootstrap): record migrations as applied without running them
+        for mid in plan_obj.baselined:
+            adapter.record_migration(plan_obj.to_ref, mid)
+        # explicit migrations run first — they reshape the schema before reconciliation
+        for m in plan_obj.migrations:
+            adapter.run_init_script(m.sql)  # engine-aware multi-statement / PL-SQL runner
+            adapter.record_migration(plan_obj.to_ref, m.id)
+            console.print(f"[magenta]migration[/magenta] applied {m.id}")
+        if statements:
+            adapter.apply(statements)
         adapter.record_deploy(plan_obj.to_ref, migration_ids=[])
         _run_hooks(repo, "post", py_interpreter)
     finally:
         adapter.dispose()
-    console.print(f"[green]applied[/green] {len(statements)} step(s); "
-                  f"deployed ref → {plan_obj.to_ref}")
+    console.print(
+        f"[green]applied[/green] {len(statements)} step(s), "
+        f"{len(plan_obj.migrations)} migration(s); deployed ref → {plan_obj.to_ref}"
+    )
 
 
 @app.command()

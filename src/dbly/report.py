@@ -11,7 +11,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from dbly.model import ObjectId, ObjectKind, Plan, Severity, Step
+from dbly.model import Migration, ObjectId, ObjectKind, Plan, Severity, Step
 
 
 def render_plan(plan: Plan, console: Console) -> None:
@@ -19,24 +19,32 @@ def render_plan(plan: Plan, console: Console) -> None:
         f"[bold]Plan[/bold] for [cyan]{plan.target}[/cyan]  "
         f"{plan.from_ref or '∅'} → {plan.to_ref}"
     )
-    if not plan.steps and not plan.warnings:
+    if not plan.steps and not plan.warnings and not plan.migrations and not plan.baselined:
         console.print("[green]nothing to do — target is up to date[/green]")
         return
 
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("#", justify="right", style="dim")
-    table.add_column("severity")
-    table.add_column("kind")
-    table.add_column("step")
-    for i, step in enumerate(plan.steps, 1):
-        sev_style = "red" if step.severity is Severity.DESTRUCTIVE else "green"
-        table.add_row(
-            str(i),
-            f"[{sev_style}]{step.severity.value}[/{sev_style}]",
-            step.kind.value,
-            step.title,
+    for m in plan.migrations:
+        console.print(f"[magenta]migration[/magenta] run  {m.id}")
+    if plan.baselined:
+        console.print(
+            f"[dim]migration baseline (recorded, not run): {', '.join(plan.baselined)}[/dim]"
         )
-    console.print(table)
+
+    if plan.steps:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("severity")
+        table.add_column("kind")
+        table.add_column("step")
+        for i, step in enumerate(plan.steps, 1):
+            sev_style = "red" if step.severity is Severity.DESTRUCTIVE else "green"
+            table.add_row(
+                str(i),
+                f"[{sev_style}]{step.severity.value}[/{sev_style}]",
+                step.kind.value,
+                step.title,
+            )
+        console.print(table)
 
     if plan.warnings:
         console.print("\n[bold yellow]Warnings[/bold yellow]")
@@ -73,6 +81,26 @@ def plan_to_sql(plan: Plan, *, state_ddl: str | None = None, record_sql: str | N
     if state_ddl:
         out += ["-- ledger table (no-op if it already exists)", state_ddl, ""]
 
+    safe_ref = plan.to_ref.replace("'", "''")
+    for m in plan.migrations:
+        mid = m.id.replace("'", "''")
+        out.append(f"-- migration (run-once): {m.id}")
+        body = m.sql.rstrip()
+        out.append(body if body.endswith(";") else body + ";")
+        out.append(
+            "INSERT INTO dbly_state (deployed_sha, migration_id) "
+            f"VALUES ('{safe_ref}', '{mid}');"
+        )
+        out.append("")
+    for mid in plan.baselined:
+        safe_mid = mid.replace("'", "''")
+        out.append(f"-- migration baseline (recorded, not run): {mid}")
+        out.append(
+            "INSERT INTO dbly_state (deployed_sha, migration_id) "
+            f"VALUES ('{safe_ref}', '{safe_mid}');"
+        )
+        out.append("")
+
     for i, step in enumerate(plan.steps, 1):
         mark = " !! DESTRUCTIVE" if step.severity is Severity.DESTRUCTIVE else ""
         out.append(f"-- [{i}] {step.severity.value}{mark}: {step.title}")
@@ -95,6 +123,11 @@ def plan_to_yaml(plan: Plan) -> str:
         "from_ref": plan.from_ref,
         "to_ref": plan.to_ref,
         "warnings": plan.warnings,
+        "migrations": [
+            {"id": m.id, "source_file": str(m.source_file), "sql": m.sql}
+            for m in plan.migrations
+        ],
+        "baselined": plan.baselined,
         "steps": [
             {
                 "title": s.title,
@@ -115,6 +148,11 @@ def plan_from_yaml(text: str) -> Plan:
     doc = yaml.safe_load(text)
     plan = Plan(target=doc["target"], from_ref=doc.get("from_ref"), to_ref=doc["to_ref"])
     plan.warnings = list(doc.get("warnings") or [])
+    plan.baselined = list(doc.get("baselined") or [])
+    plan.migrations = [
+        Migration(m["id"], m["sql"], Path(m["source_file"]))
+        for m in (doc.get("migrations") or [])
+    ]
     for s in doc.get("steps") or []:
         obj = s.get("object")
         oid = None

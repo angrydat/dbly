@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import abc
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 
 from dbly.config import ConnectionConfig
 from dbly.engine import make_engine
@@ -94,6 +94,20 @@ class Adapter(abc.ABC):
 
     @abc.abstractmethod
     def record_deploy(self, ref: str, migration_ids: list[str]) -> None: ...
+
+    # --- explicit migrations (run-once, ledger-tracked) --------------------------------
+    def applied_migrations(self) -> set[str]:
+        """Migration ids already recorded in the ledger (standard SQL, all engines)."""
+        self.ensure_state_table()
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT DISTINCT migration_id FROM dbly_state WHERE migration_id IS NOT NULL")
+            )
+            return {r[0] for r in rows}
+
+    def record_migration(self, ref: str, migration_id: str) -> None:
+        """Mark a migration applied (reuses the per-engine record_deploy insert)."""
+        self.record_deploy(ref, [migration_id])
 
     # --- pure SQL builders (no connection — used by `plan --sql` export) ----------------
     @abc.abstractmethod

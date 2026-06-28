@@ -129,12 +129,27 @@ class Step:
 
 
 @dataclass(slots=True)
+class Migration:
+    """An explicit, run-once, hand-written migration script (CONCEPT.md §5).
+
+    For changes the additive diff cannot do safely — renames, type changes with data
+    transformation, backfills. Tracked by ``id`` in the ledger so it runs exactly once.
+    """
+
+    id: str
+    sql: str
+    source_file: Path
+
+
+@dataclass(slots=True)
 class Plan:
     """An ordered, reviewable set of steps — the artifact of ``dbly plan``."""
 
     target: str
     from_ref: str | None
     to_ref: str
+    migrations: list[Migration] = field(default_factory=list)   # pending — run before steps
+    baselined: list[str] = field(default_factory=list)          # recorded, not run (bootstrap)
     steps: list[Step] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 

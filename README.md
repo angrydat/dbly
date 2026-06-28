@@ -43,9 +43,16 @@ db/
     v_open_orders.vw
     grants.sql
   init/                 # optional: privileged greenfield groundwork (CREATE DATABASE/ROLE…)
+  migrations/           # optional: ordered, run-once ALTERs for renames / data backfills
 hooks/pre/  hooks/post/  # optional: .sql or .py hooks (e.g. ArcGIS/ArcPy steps)
 .dbignore               # files in the repo that should not be deployed
 ```
+
+Most changes are declarative — edit the object file, dbly figures out the additive diff. For
+changes the diff can't do safely (renaming a column, moving data), drop an ordered script in
+`migrations/` (`0001_…sql`); it runs exactly once, is recorded in the ledger, and the table
+it touches defers to it for that deploy. On a fresh database, migrations are *baselined*
+(recorded, not run) since the object files already describe the end state.
 
 ## Connect
 

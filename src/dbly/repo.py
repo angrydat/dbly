@@ -16,6 +16,7 @@ import pathspec
 from dbly.model import ChangeType
 
 _SQL_SUFFIXES = {".sql", ".tbl", ".vw", ".prc", ".fnc", ".pkg", ".trg", ".typ", ".ddl"}
+MIGRATIONS_DIR = "migrations"  # run-once scripts — not declarative objects
 
 
 @dataclass(slots=True)
@@ -52,6 +53,14 @@ class Repo:
     def _is_sql(rel: Path) -> bool:
         return rel.suffix.lower() in _SQL_SUFFIXES
 
+    @staticmethod
+    def _is_migration(rel: Path) -> bool:
+        return len(rel.parts) > 0 and rel.parts[0] == MIGRATIONS_DIR
+
+    def _is_object(self, rel: Path) -> bool:
+        """A deployable declarative object file (SQL, not a migration, not ignored)."""
+        return self._is_sql(rel) and not self._is_migration(rel) and not self.is_ignored(rel)
+
     def changed_files(self, from_ref: str | None, to_ref: str) -> list[FileChange]:
         """Files changed between two refs (or the full tree at ``to_ref`` for bootstrap)."""
         if from_ref is None:
@@ -60,14 +69,21 @@ class Repo:
         return self._parse_name_status(raw)
 
     def list_files(self, ref: str) -> list[Path]:
-        """All deployable SQL files present at ``ref``."""
+        """All deployable declarative object files present at ``ref`` (excludes migrations)."""
         raw = self._git("ls-tree", "-r", "--name-only", "-z", ref)
-        result = []
-        for name in filter(None, raw.split("\0")):
-            rel = Path(name)
-            if self._is_sql(rel) and not self.is_ignored(rel):
-                result.append(rel)
-        return result
+        return [Path(n) for n in filter(None, raw.split("\0")) if self._is_object(Path(n))]
+
+    def migration_files(self, ref: str) -> list[tuple[str, Path]]:
+        """Ordered (id, path) of migration scripts under ``migrations/`` at ``ref``.
+
+        Id is the filename; order is lexicographic, so prefix files ``0001_…`` / a timestamp.
+        """
+        raw = self._git("ls-tree", "-r", "--name-only", "-z", ref)
+        out = [
+            Path(n) for n in filter(None, raw.split("\0"))
+            if self._is_migration(Path(n)) and Path(n).suffix.lower() == ".sql"
+        ]
+        return [(p.name, p) for p in sorted(out, key=lambda p: p.as_posix())]
 
     def _parse_name_status(self, raw: str) -> list[FileChange]:
         tokens = [t for t in raw.split("\0") if t]
@@ -79,12 +95,12 @@ class Repo:
             if code == "R":  # rename: status, old, new
                 new = Path(tokens[i + 2])
                 i += 3
-                if self._is_sql(new) and not self.is_ignored(new):
+                if self._is_object(new):
                     changes.append(FileChange(new, ChangeType.MODIFIED))
                 continue
             rel = Path(tokens[i + 1])
             i += 2
-            if not self._is_sql(rel) or self.is_ignored(rel):
+            if not self._is_object(rel):
                 continue
             mapping = {"A": ChangeType.ADDED, "M": ChangeType.MODIFIED,
                        "D": ChangeType.DELETED}

@@ -12,6 +12,7 @@ from dbly import parsing
 from dbly.adapters.base import Adapter
 from dbly.model import (
     ChangeType,
+    Migration,
     ObjectKind,
     ParsedObject,
     Plan,
@@ -31,6 +32,19 @@ def build_plan(
     dialect: str | None,
 ) -> Plan:
     plan = Plan(target=target, from_ref=from_ref, to_ref=to_ref)
+
+    # Explicit migrations (run-once). On bootstrap (no baseline) the canonical objects
+    # already produce the end state, so pending migrations are *baselined* (recorded, not
+    # run); on upgrade they run — before the object steps — to reshape the schema.
+    applied = adapter.applied_migrations()
+    pending = [(mid, p) for mid, p in repo.migration_files(to_ref) if mid not in applied]
+    if from_ref is None:
+        plan.baselined = [mid for mid, _ in pending]
+    else:
+        plan.migrations = [
+            Migration(mid, repo.read_at(to_ref, p), p) for mid, p in pending
+        ]
+
     changes = repo.changed_files(from_ref, to_ref)
 
     # Bucket by kind so the plan is emitted in dependency-safe order regardless of file
@@ -55,9 +69,20 @@ def build_plan(
             else:
                 replaceable.append(obj)
 
+    # Tables touched by a pending migration are migration-managed for this deploy — the
+    # migration reshapes them at apply time, so the (plan-time) additive diff must defer.
+    migration_tables: set[str] = set()
+    for m in plan.migrations:
+        migration_tables |= parsing.referenced_tables(m.sql, dialect=dialect)
+
     for obj in sequences:
         _plan_create_if_missing(adapter, plan, obj)
     for obj in tables:
+        if obj.id.name.lower() in migration_tables:
+            plan.warnings.append(
+                f"{obj.id}: managed by a pending migration — additive diff skipped this deploy"
+            )
+            continue
         _plan_table(adapter, plan, obj, dialect)
     for obj in indexes:
         _plan_create_if_missing(adapter, plan, obj)

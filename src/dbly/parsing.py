@@ -121,6 +121,24 @@ def parse_file(
     return objects
 
 
+def referenced_tables(sql: str, *, dialect: str | None = None) -> set[str]:
+    """Lower-cased table names referenced anywhere in a SQL script (best effort).
+
+    Used to detect which tables a pending migration touches, so the additive diff defers to
+    the migration for those tables. Returns an empty set if sqlglot cannot parse the script.
+    """
+    names: set[str] = set()
+    try:
+        for stmt in sqlglot.parse(sql, read=dialect):
+            if stmt is None:
+                continue
+            for tbl in stmt.find_all(exp.Table):
+                names.add(tbl.name.lower())
+    except Exception:  # noqa: BLE001 — procedural/odd SQL; suppression is best-effort
+        pass
+    return names
+
+
 def canonical_hash(sql: str | None, *, dialect: str | None = None) -> str | None:
     """A formatting-insensitive hash of a definition, for advisory drift detection.
 
