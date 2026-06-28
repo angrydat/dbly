@@ -54,6 +54,7 @@ all = ["oracledb>=2.0", "pymssql>=2.3"]
 Homepage = "https://angrydata.info/dbly"
 Repository = "https://github.com/angrydat/dbly"
 Issues = "https://github.com/angrydat/dbly/issues"
+Changelog = "https://github.com/angrydat/dbly/blob/main/CHANGELOG.md"
 
 [project.scripts]
 dbly = "dbly.cli:main"
