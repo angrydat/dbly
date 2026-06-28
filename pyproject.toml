@@ -1,6 +1,6 @@
 [project]
 name = "dbly"
-version = "0.0.1"
+version = "0.1.0"
 description = "State-based, cross-engine database deployment — git-driven, parser-assisted, SQL-first."
 readme = "README.md"
 license = { text = "MIT" }
