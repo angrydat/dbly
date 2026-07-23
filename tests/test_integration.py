@@ -415,3 +415,30 @@ def test_extra_ignore_excludes_unparseable_files(tmp_path: Path):
     files = repo.list_files("HEAD")
     assert Path("schema/app/good.tbl") in files
     assert Path("schema/app/bad.vw") not in files                 # ignored via extra_ignore
+
+
+def test_select_schemas_and_paths_scope_discovery(tmp_path: Path):
+    repo_root = tmp_path / "db"
+    for sub in ("pgsql/schema/bas", "pgsql/schema/bas/domains", "pgsql/schema/gzp"):
+        (repo_root / sub).mkdir(parents=True)
+    _init_repo(repo_root)
+    (repo_root / "pgsql/schema/bas/kunde.tbl").write_text("CREATE TABLE bas.kunde (id int);", encoding="utf-8")
+    (repo_root / "pgsql/schema/bas/domains/d_typ.tbl").write_text("CREATE TABLE bas.d_typ (id int);", encoding="utf-8")
+    (repo_root / "pgsql/schema/gzp/plan.tbl").write_text("CREATE TABLE gzp.plan (id int);", encoding="utf-8")
+    _commit(repo_root, "v1")
+
+    # --schema bas → only the bas subtree (incl. bas/domains), not gzp
+    r_schema = Repo(repo_root, object_root="pgsql/schema", select_schemas=["bas"])
+    got = {p.as_posix() for p in r_schema.list_files("HEAD")}
+    assert got == {"pgsql/schema/bas/kunde.tbl", "pgsql/schema/bas/domains/d_typ.tbl"}
+
+    # --schema is case-insensitive
+    assert {p.as_posix() for p in Repo(repo_root, object_root="pgsql/schema",
+            select_schemas=["BAS"]).list_files("HEAD")} == got
+
+    # --path bas/domains → only that subpath
+    r_path = Repo(repo_root, object_root="pgsql/schema", select_paths=["bas/domains"])
+    assert {p.as_posix() for p in r_path.list_files("HEAD")} == {"pgsql/schema/bas/domains/d_typ.tbl"}
+
+    # no selection → everything under object_root
+    assert len(Repo(repo_root, object_root="pgsql/schema").list_files("HEAD")) == 3

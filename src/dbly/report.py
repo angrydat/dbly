@@ -6,12 +6,16 @@ express: ordering, severity, source provenance and warnings.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 from rich.console import Console
 from rich.table import Table
 
 from dbly.model import Migration, ObjectId, ObjectKind, Plan, Severity, Step
+
+if TYPE_CHECKING:
+    from dbly.drift import DriftReport
 
 
 def _decorate_ref(ref: str | None, ref_names: dict[str, str] | None) -> str:
@@ -72,6 +76,78 @@ def render_plan(
             "\n[red bold]Plan contains destructive steps[/red bold] — "
             "they require [bold]--allow-destructive[/bold] to apply."
         )
+
+
+def render_drift(
+    rep: DriftReport,
+    console: Console,
+    *,
+    target: str,
+    ref: str,
+    ref_names: dict[str, str] | None = None,
+    scope: str | None = None,
+) -> None:
+    """Render a drift report with explicit direction, grouping and counts (CONCEPT.md §9).
+
+    The old output was one flat line per item and never made clear *which way* a difference
+    ran. Here each group states the direction in its heading, and column drift uses ``+`` (in
+    the repo, missing from the DB) vs. ``−`` (in the DB, not in the repo).
+    """
+    head = f"[bold]Drift[/bold] for [cyan]{target}[/cyan]  {_decorate_ref(ref, ref_names)}"
+    if scope:
+        head += f"  [dim](scope: {scope})[/dim]"
+    console.print(head)
+
+    if rep.clean and not rep.unreadable:
+        console.print("[green]✓ no drift — the database matches the desired state.[/green]")
+        return
+
+    n_add = sum(len(cd.added) for cd in rep.columns)
+    n_del = sum(len(cd.removed) for cd in rep.columns)
+    tally = [
+        f"[yellow]{len(rep.missing)}[/yellow] to create",
+        f"[red]{len(rep.orphaned)}[/red] orphaned" if rep.orphaned else None,
+        f"[yellow]{len(rep.columns)}[/yellow] tables with column drift"
+        f" ([green]+{n_add}[/green]/[red]−{n_del}[/red])" if rep.columns else None,
+        f"[yellow]{len(rep.definitions)}[/yellow] changed definitions" if rep.definitions else None,
+        f"[dim]{len(rep.unreadable)} unreadable[/dim]" if rep.unreadable else None,
+    ]
+    console.print("  " + "  ·  ".join(t for t in tally if t) + "\n")
+
+    def _section(title: str, style: str, rows: list[str]) -> None:
+        if not rows:
+            return
+        console.print(f"[{style} bold]{title}[/{style} bold]  [dim]({len(rows)})[/dim]")
+        for r in rows:
+            console.print(f"  {r}")
+        console.print()
+
+    _section(
+        "Only in the repo — will be created on apply", "yellow",
+        [f"{k.value:9} {oid}" for k, oid in rep.missing],
+    )
+    _section(
+        "Only in the database — not in the repo", "red",
+        [f"{k.value:9} {oid}" for k, oid in rep.orphaned],
+    )
+    if rep.columns:
+        console.print(f"[yellow bold]Column drift[/yellow bold]  [dim]({len(rep.columns)})[/dim]")
+        console.print("  [dim](+ in repo, missing from DB · − in DB, not in repo)[/dim]")
+        for cd in rep.columns:
+            console.print(f"  {cd.table}")
+            if cd.added:
+                console.print(f"    [green]+ {', '.join(cd.added)}[/green]")
+            if cd.removed:
+                console.print(f"    [red]− {', '.join(cd.removed)}[/red]")
+        console.print()
+    _section(
+        "Definition differs — advisory", "yellow",
+        [f"{k.value:9} {oid}" for k, oid in rep.definitions],
+    )
+    _section(
+        "Could not introspect — advisory", "dim",
+        [f"{k.value:9} {oid}" for k, oid in rep.unreadable],
+    )
 
 
 def plan_to_sql(plan: Plan, *, state_ddl: str | None = None, record_sql: str | None = None) -> str:

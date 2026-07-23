@@ -33,6 +33,8 @@ class Repo:
         *,
         object_root: str | None = None,
         extra_ignore: list[str] | None = None,
+        select_schemas: list[str] | None = None,
+        select_paths: list[str] | None = None,
     ):
         self.root = root.resolve()
         if not (self.root / ".git").exists():
@@ -41,6 +43,9 @@ class Repo:
         self.object_root = (
             Path(object_root) if object_root and object_root not in (".", "") else None
         )
+        # optional subset selection (deploy/check only part of the tree)
+        self.select_schemas = {s.lower() for s in select_schemas} if select_schemas else None
+        self.select_paths = [Path(p) for p in select_paths] if select_paths else None
         self._ignore = self._load_dbignore(extra_ignore or [])
 
     def _git(self, *args: str) -> str:
@@ -73,12 +78,26 @@ class Repo:
             return True
         return rel == self.object_root or self.object_root in rel.parents
 
+    def _selected(self, rel: Path) -> bool:
+        """Honour an optional subset selection (``--schema`` / ``--path``). Both AND together."""
+        if self.select_paths is not None:
+            base = self.object_root or Path()
+            prefixes = [base / p for p in self.select_paths]
+            if not any(rel == pre or pre in rel.parents for pre in prefixes):
+                return False
+        if self.select_schemas is not None:
+            sch = self.schema_for(rel)
+            if sch is None or sch.lower() not in self.select_schemas:
+                return False
+        return True
+
     def _is_object(self, rel: Path) -> bool:
-        """A deployable declarative object file (SQL, under object_root, not a migration/ignored)."""
+        """A deployable declarative object file (SQL, under object_root, selected, not ignored)."""
         return (
             self._is_sql(rel)
             and not self._is_migration(rel)
             and self._under_object_root(rel)
+            and self._selected(rel)
             and not self.is_ignored(rel)
         )
 

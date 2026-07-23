@@ -160,3 +160,21 @@ def test_decorate_ref_git_style():
     assert report._decorate_ref("WORKTREE", None) == "working tree"
     assert report._decorate_ref("9ff5e440abc", {"9ff5e440abc": "v0.1, main"}) == "v0.1, main (9ff5e440)"
     assert report._decorate_ref("deadbeef", None) == "deadbeef"  # no names → raw sha
+
+
+def test_render_drift_shows_direction_and_counts(capsys):
+    from rich.console import Console
+    from dbly.drift import ColumnDrift, DriftReport
+    rep = DriftReport()
+    rep.missing.append((ObjectKind.TABLE, __import__("dbly.model", fromlist=["ObjectId"]).ObjectId("bas", "neu")))
+    rep.columns.append(ColumnDrift(
+        __import__("dbly.model", fromlist=["ObjectId"]).ObjectId("bas", "kunde"),
+        added=["email"], removed=["legacy"]))
+    report.render_drift(rep, Console(force_terminal=False, width=200),
+                        target="dev", ref="abc1234", scope="schema=bas")
+    out = capsys.readouterr().out
+    assert "Only in the repo" in out          # explicit direction, not just "missing"
+    assert "Column drift" in out
+    assert "+ email" in out and "− legacy" in out   # + = add to DB, − = only in DB
+    assert "1 to create" in out               # summary tally
+    assert "scope: schema=bas" in out          # scope shown in header

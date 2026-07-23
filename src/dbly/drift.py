@@ -78,9 +78,13 @@ def compute_drift(
             report.missing.append((obj.kind, obj.id))
 
     if include_orphans:
+        sel = repo.select_schemas  # scope orphans to the same subset as desired discovery
         for key, o in live.items():
-            if key not in desired:
-                report.orphaned.append((o.kind, o.id))
+            if key in desired:
+                continue
+            if sel is not None and (o.id.schema is None or o.id.schema.lower() not in sel):
+                continue
+            report.orphaned.append((o.kind, o.id))
 
     for key, obj in desired.items():
         if obj.kind is ObjectKind.TABLE and key in live:

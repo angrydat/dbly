@@ -7,6 +7,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-24
+
+### Added
+
+- **Partial deploy / check.** `plan`, `apply` and `check` take `--schema NAME` (the folder
+  under `object_root`; repeatable, case-insensitive) and `--path SUBPATH` (any subtree under
+  `object_root`; repeatable) to scope the operation to part of the repo — e.g. deploy only
+  `bas/`. Both filters AND together; orphan reporting is scoped to the same selection.
+
+### Changed
+
+- **Redesigned `check` output.** Drift is now grouped with an explicit direction —
+  *"Only in the repo — will be created on apply"* vs. *"Only in the database — not in the
+  repo"* — with per-group counts, a summary tally, and `+`/`−` markers for column drift
+  (`+` in the repo but missing from the DB, `−` in the DB but not the repo). The header shows
+  the ref (decorated) and the active scope.
+
 ## [0.4.1] — 2026-07-23
 
 ### Changed

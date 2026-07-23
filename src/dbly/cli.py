@@ -69,8 +69,26 @@ def _main(
     _quiet_parser_noise(debug)
 
 
-def _open_repo(repo_path: Path, project: ProjectConfig) -> Repo:
-    return Repo(repo_path, object_root=project.object_root, extra_ignore=project.ignore)
+def _open_repo(
+    repo_path: Path, project: ProjectConfig,
+    *, schemas: Optional[list[str]] = None, paths: Optional[list[str]] = None,
+) -> Repo:
+    return Repo(
+        repo_path,
+        object_root=project.object_root,
+        extra_ignore=project.ignore,
+        select_schemas=schemas or None,
+        select_paths=paths or None,
+    )
+
+
+def _scope_label(schemas: Optional[list[str]], paths: Optional[list[str]]) -> Optional[str]:
+    bits = []
+    if schemas:
+        bits.append("schema=" + ",".join(schemas))
+    if paths:
+        bits.append("path=" + ",".join(paths))
+    return " ".join(bits) or None
 
 
 def _resolve_target(project: ProjectConfig, repo_path: Path, target: str) -> ConnectionConfig:
@@ -106,9 +124,10 @@ def _decorations(repo_path: Path, plan: Plan) -> dict[str, str]:
 def _make_plan(
     repo_path: Path, target: str, from_ref: Optional[str], to_ref: str,
     *, worktree: bool = False,
+    schemas: Optional[list[str]] = None, paths: Optional[list[str]] = None,
 ) -> Plan:
     project = load_project(repo_path)
-    repo = _open_repo(repo_path, project)
+    repo = _open_repo(repo_path, project, schemas=schemas, paths=paths)
     cfg = _resolve_target(project, repo_path, target)
     dialect = sqlglot_dialect(detect_dialect(cfg))
     adapter = get_adapter(cfg)
@@ -144,9 +163,16 @@ def plan(
         help="plan against the working tree (uncommitted + untracked object files), "
              "not a git ref — for the fast edit→plan loop.",
     ),
+    schema: Optional[list[str]] = typer.Option(
+        None, "--schema", help="limit to these schemas (folder under object_root); repeatable."
+    ),
+    path: Optional[list[str]] = typer.Option(
+        None, "--path", help="limit to this subpath under object_root; repeatable."
+    ),
 ) -> None:
     """Compute and show the deployment plan."""
-    plan_obj = _make_plan(repo_path, target, from_ref, to, worktree=worktree)
+    plan_obj = _make_plan(repo_path, target, from_ref, to, worktree=worktree,
+                          schemas=schema, paths=path)
     report.render_plan(plan_obj, console, ref_names=_decorations(repo_path, plan_obj))
     if out:
         out.write_text(report.plan_to_yaml(plan_obj), encoding="utf-8")
@@ -179,13 +205,19 @@ def apply(
     py_interpreter: str = typer.Option(
         "python", "--py-interpreter", help="interpreter for .py hooks (e.g. ArcGIS propy)."
     ),
+    schema: Optional[list[str]] = typer.Option(
+        None, "--schema", help="limit to these schemas (folder under object_root); repeatable."
+    ),
+    path: Optional[list[str]] = typer.Option(
+        None, "--path", help="limit to this subpath under object_root; repeatable."
+    ),
 ) -> None:
     """Apply a plan to the target database (re-computes one unless a file is given)."""
     if plan_file is not None:
         plan_obj = report.plan_from_yaml(plan_file.read_text(encoding="utf-8"))
         target = plan_obj.target
     else:
-        plan_obj = _make_plan(repo_path, target, from_ref, to)
+        plan_obj = _make_plan(repo_path, target, from_ref, to, schemas=schema, paths=path)
 
     report.render_plan(plan_obj, console, ref_names=_decorations(repo_path, plan_obj))
 
@@ -310,39 +342,32 @@ def check(
         False, "--worktree", "--dirty",
         help="compare the working tree (uncommitted + untracked) against the DB, not a git ref.",
     ),
+    schema: Optional[list[str]] = typer.Option(
+        None, "--schema", help="limit to these schemas (folder under object_root); repeatable."
+    ),
+    path: Optional[list[str]] = typer.Option(
+        None, "--path", help="limit to this subpath under object_root; repeatable."
+    ),
 ) -> None:
     """Detect drift: compare the desired state at <to> against the live database."""
     project = load_project(repo_path)
-    repo = _open_repo(repo_path, project)
+    repo = _open_repo(repo_path, project, schemas=schema, paths=path)
     cfg = _resolve_target(project, repo_path, target)
     dialect = sqlglot_dialect(detect_dialect(cfg))
+    resolved_to = repo.resolve_ref(WORKTREE if worktree else to)
     adapter = get_adapter(cfg)
     try:
         rep = drift.compute_drift(
-            repo, adapter,
-            to_ref=repo.resolve_ref(WORKTREE if worktree else to),
-            dialect=dialect, include_orphans=orphans,
+            repo, adapter, to_ref=resolved_to, dialect=dialect, include_orphans=orphans,
         )
     finally:
         adapter.dispose()
 
-    if rep.clean and not rep.unreadable:
-        console.print("[green]no drift — database matches the desired state.[/green]")
-        return
-
-    for kind, oid in rep.missing:
-        console.print(f"[yellow]missing[/yellow]   {kind.value} {oid}  (in repo, not in DB)")
-    for cd in rep.columns:
-        if cd.added:
-            console.print(f"[yellow]columns[/yellow]   {cd.table}  to add: {', '.join(cd.added)}")
-        if cd.removed:
-            console.print(f"[red]columns[/red]   {cd.table}  only in DB: {', '.join(cd.removed)}")
-    for kind, oid in rep.definitions:
-        console.print(f"[yellow]changed[/yellow]   {kind.value} {oid}  (definition differs — advisory)")
-    for kind, oid in rep.orphaned:
-        console.print(f"[dim]orphaned[/dim]  {kind.value} {oid}  (in DB, not in repo)")
-    for kind, oid in rep.unreadable:
-        console.print(f"[dim]unreadable[/dim] {kind.value} {oid}  (columns could not be reflected — advisory)")
+    report.render_drift(
+        rep, console, target=target, ref=resolved_to,
+        ref_names=_decorations(repo_path, Plan(target=target, from_ref=None, to_ref=resolved_to)),
+        scope=_scope_label(schema, path),
+    )
     if not rep.clean:
         raise typer.Exit(code=1)
 
