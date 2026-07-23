@@ -27,11 +27,21 @@ class FileChange:
 
 
 class Repo:
-    def __init__(self, root: Path):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        object_root: str | None = None,
+        extra_ignore: list[str] | None = None,
+    ):
         self.root = root.resolve()
         if not (self.root / ".git").exists():
             raise ValueError(f"not a git repository: {self.root}")
-        self._ignore = self._load_dbignore()
+        # the subtree object files live under; the schema hint is the first segment *below* it.
+        self.object_root = (
+            Path(object_root) if object_root and object_root not in (".", "") else None
+        )
+        self._ignore = self._load_dbignore(extra_ignore or [])
 
     def _git(self, *args: str) -> str:
         out = subprocess.run(
@@ -42,10 +52,10 @@ class Repo:
         )
         return out.stdout
 
-    def _load_dbignore(self) -> pathspec.PathSpec:
+    def _load_dbignore(self, extra: list[str]) -> pathspec.PathSpec:
         f = self.root / ".dbignore"
         lines = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
-        return pathspec.PathSpec.from_lines("gitwildmatch", lines)
+        return pathspec.PathSpec.from_lines("gitwildmatch", [*lines, *extra])
 
     def is_ignored(self, rel: Path) -> bool:
         return self._ignore.match_file(rel.as_posix())
@@ -58,9 +68,19 @@ class Repo:
     def _is_migration(rel: Path) -> bool:
         return len(rel.parts) > 0 and rel.parts[0] == MIGRATIONS_DIR
 
+    def _under_object_root(self, rel: Path) -> bool:
+        if self.object_root is None:
+            return True
+        return rel == self.object_root or self.object_root in rel.parents
+
     def _is_object(self, rel: Path) -> bool:
-        """A deployable declarative object file (SQL, not a migration, not ignored)."""
-        return self._is_sql(rel) and not self._is_migration(rel) and not self.is_ignored(rel)
+        """A deployable declarative object file (SQL, under object_root, not a migration/ignored)."""
+        return (
+            self._is_sql(rel)
+            and not self._is_migration(rel)
+            and self._under_object_root(rel)
+            and not self.is_ignored(rel)
+        )
 
     def _untracked_files(self) -> list[Path]:
         """New files in the working tree not yet added to git (``git status`` "??")."""
@@ -169,8 +189,16 @@ class Repo:
     def schema_for(self, rel: Path) -> str | None:
         """Best-practice convention: the first path segment names the DB schema.
 
-        Only a *hint* — the parser overrides it when the DDL is schema-qualified.
-        Returns None when the file sits at the repo root.
+        With an ``object_root`` set, the segment is taken *relative to that root* — so
+        ``pgsql/schema/bas/foo.tbl`` under root ``pgsql/schema`` yields schema ``bas``.
+        Only a *hint* — the parser overrides it when the DDL is schema-qualified. Returns
+        None when the file sits directly at the (object) root.
         """
-        parts = rel.parts
+        r = rel
+        if self.object_root is not None:
+            try:
+                r = rel.relative_to(self.object_root)
+            except ValueError:
+                return None
+        parts = r.parts
         return parts[0] if len(parts) > 1 else None

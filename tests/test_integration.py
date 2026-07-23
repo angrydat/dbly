@@ -368,3 +368,50 @@ def test_repo_ref_names_decorates_tag_and_branch(tmp_path: Path):
     names = repo.ref_names(sha)
     assert "v0.1" in names
     assert any(n in ("main", "master") for n in names)  # the current branch points here too
+
+
+def test_object_root_scopes_discovery_and_schema(tmp_path: Path):
+    """object_root: schema = first segment BELOW the root; files outside it are ignored."""
+    from dbly import parsing
+    repo_root = tmp_path / "db"
+    (repo_root / "pgsql" / "schema" / "bas").mkdir(parents=True)
+    (repo_root / "ora").mkdir(parents=True)
+    _init_repo(repo_root)
+    # unqualified CREATE (schema comes from the folder), under pgsql/schema/bas
+    (repo_root / "pgsql" / "schema" / "bas" / "kunde.tbl").write_text(
+        "CREATE TABLE IF NOT EXISTS kunde (id INTEGER, name TEXT);", encoding="utf-8"
+    )
+    # an Oracle file outside object_root must NOT be discovered
+    (repo_root / "ora" / "irrelevant.tbl").write_text(
+        "CREATE TABLE junk (id NUMBER);", encoding="utf-8"
+    )
+    _commit(repo_root, "v1")
+
+    repo = Repo(repo_root, object_root="pgsql/schema")
+    files = repo.list_files("HEAD")
+    assert files == [Path("pgsql/schema/bas/kunde.tbl")]          # ora/ excluded
+    assert repo.schema_for(files[0]) == "bas"                      # segment below object_root
+
+    # parse with that hint → object id carries the real schema, not "pgsql"
+    sql = repo.read_at("HEAD", files[0])
+    obj = parsing.parse_file(sql, files[0], default_schema=repo.schema_for(files[0]),
+                             dialect="postgres")[0]
+    assert str(obj.id) == "bas.kunde"
+
+
+def test_extra_ignore_excludes_unparseable_files(tmp_path: Path):
+    repo_root = tmp_path / "db"
+    (repo_root / "schema" / "app").mkdir(parents=True)
+    _init_repo(repo_root)
+    (repo_root / "schema" / "app" / "good.tbl").write_text(
+        "CREATE TABLE app.good (id INTEGER);", encoding="utf-8"
+    )
+    (repo_root / "schema" / "app" / "bad.vw").write_text(
+        "CREATE VIEW app.bad AS SELECT 1;", encoding="utf-8"
+    )
+    _commit(repo_root, "v1")
+
+    repo = Repo(repo_root, object_root="schema", extra_ignore=["schema/app/bad.vw"])
+    files = repo.list_files("HEAD")
+    assert Path("schema/app/good.tbl") in files
+    assert Path("schema/app/bad.vw") not in files                 # ignored via extra_ignore

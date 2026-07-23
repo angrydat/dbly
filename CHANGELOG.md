@@ -7,6 +7,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-23
+
+### Added
+
+- **Project configuration (`dbly.toml`).** An optional file at the repo root, for repos that
+  need more than a single connection profile:
+  - `object_root` — the subtree the declarative object files live under. The schema hint is
+    taken from the first path segment *below* this root, so a layout like
+    `pgsql/schema/<schema>/<obj>` maps to the right schema instead of the literal top folder.
+  - `environment` — default engine/dialect when a profile omits `environment=`.
+  - `[targets]` — named connection profiles, so `dbly plan --target dev` resolves to a
+    profile path.
+  - `ignore` — extra ignore patterns (gitwildmatch), merged with `.dbignore` (e.g. to skip a
+    handful of files a parser cannot read).
+
+  Absent config → unchanged behaviour (`object_root="."`, `--target` is a profile path).
+
+### Fixed
+
+- **Case-insensitive identifier matching on PostgreSQL.** Postgres folds unquoted identifiers
+  to lower case, so a DDL `CREATE TABLE FOO` lives as `foo`. `plan` (`table_exists`/
+  `get_columns`) and `check` looked the object up by the *declared* name and either planned a
+  spurious full `CREATE` or crashed with `NoSuchTableError`. Both now resolve the object
+  case-insensitively and reflect it by its real, live identity.
+- **`check` no longer aborts on a single unreflectable table.** A table whose columns cannot
+  be introspected is reported as advisory `unreadable` and the drift scan continues, instead
+  of failing the whole run.
+
 ## [0.3.0] — 2026-07-21
 
 ### Added

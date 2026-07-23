@@ -26,13 +26,49 @@ class PostgresAdapter(Adapter):
     transactional_ddl = True
     default_schema = "public"
 
+    def _resolve(self, schema: str | None, name: str) -> tuple[str, str] | None:
+        """Find a relation case-insensitively, returning its real (schema, name).
+
+        Postgres folds unquoted identifiers to lower case, so a DDL ``CREATE TABLE FOO`` lives
+        as ``foo``; the desired name (as written) need not match verbatim. Exact matches are
+        preferred over case-folded ones when both exist.
+        """
+        params = {"n": name}
+        schema_pred = ""
+        if schema is not None:
+            schema_pred = "AND lower(n.nspname) = lower(:s) "
+            params["s"] = schema
+        q = text(
+            "SELECT n.nspname, c.relname FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE lower(c.relname) = lower(:n) {schema_pred}"
+            "AND c.relkind IN ('r','p','v','m') "
+            "ORDER BY (c.relname = :n) DESC LIMIT 1"
+        )
+        with self.engine.connect() as conn:
+            row = conn.execute(q, params).first()
+        return (row[0], row[1]) if row else None
+
     def table_exists(self, schema: str | None, name: str) -> bool:
-        insp = inspect(self.engine)
-        return insp.has_table(name, schema=schema)
+        params = {"n": name}
+        schema_pred = ""
+        if schema is not None:
+            schema_pred = "AND lower(n.nspname) = lower(:s) "
+            params["s"] = schema
+        with self.engine.connect() as conn:
+            return conn.execute(
+                text(
+                    "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    f"WHERE lower(c.relname) = lower(:n) {schema_pred}"
+                    "AND c.relkind IN ('r','p') LIMIT 1"
+                ),
+                params,
+            ).first() is not None
 
     def get_columns(self, schema: str | None, name: str) -> list[Column]:
         insp = inspect(self.engine)
-        cols = insp.get_columns(name, schema=schema)
+        rs, rn = self._resolve(schema, name) or (schema, name)
+        cols = insp.get_columns(rn, schema=rs)
         return [
             Column(
                 name=c["name"],

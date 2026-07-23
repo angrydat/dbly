@@ -54,6 +54,27 @@ changes the diff can't do safely (renaming a column, moving data), drop an order
 it touches defers to it for that deploy. On a fresh database, migrations are *baselined*
 (recorded, not run) since the object files already describe the end state.
 
+## Project configuration (optional)
+
+For anything beyond the defaults, drop a `dbly.toml` at the repo root. It's optional — without
+it, `--target` is a profile path and the schema is the first folder segment.
+
+```toml
+object_root = "pgsql/schema"     # objects live here; schema = first segment BELOW this root
+environment = "postgres"         # default engine when a profile omits environment=
+ignore = ["**/*_1252.sql"]       # extra ignore patterns, merged with .dbignore
+
+[targets]                        # dbly plan --target dev  →  resolves to the profile path
+dev  = "conn/dev.properties"
+beta = "conn/beta.properties"
+prod = "conn/prod.properties"
+```
+
+`object_root` is the key that lets dbly sit on an existing repo whose objects live deeper than
+the top level (e.g. `pgsql/schema/<schema>/<object>`): the schema is derived *relative to the
+root*, so `pgsql/schema/sales/customer.tbl` maps to schema `sales`, not `pgsql`. Put root-level
+keys (`object_root`, `environment`, `ignore`) **before** the `[targets]` table (TOML rule).
+
 ## Connect
 
 A connection profile (reuses the familiar `connection.properties` format):

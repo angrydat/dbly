@@ -36,6 +36,7 @@ class DriftReport:
     orphaned: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)
     columns: list[ColumnDrift] = field(default_factory=list)
     definitions: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)
+    unreadable: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)  # reflection failed (advisory)
 
     @property
     def clean(self) -> bool:
@@ -83,7 +84,15 @@ def compute_drift(
 
     for key, obj in desired.items():
         if obj.kind is ObjectKind.TABLE and key in live:
-            actual = {c.key() for c in adapter.get_columns(obj.id.schema, obj.id.name)}
+            # Reflect columns by the LIVE object's identity — the engine may have folded the
+            # declared name's case (unquoted `FOO` → `foo` on Postgres), so the desired name
+            # need not exist verbatim. A table that cannot be reflected is skipped, not fatal.
+            live_id = live[key].id
+            try:
+                actual = {c.key() for c in adapter.get_columns(live_id.schema, live_id.name)}
+            except Exception:  # noqa: BLE001 — one odd table must not abort the whole check
+                report.unreadable.append((obj.kind, obj.id))
+                continue
             want = {c.key() for c in parsing.desired_columns(obj.sql, dialect=dialect)}
             added, removed = sorted(want - actual), sorted(actual - want)
             if added or removed:

@@ -16,11 +16,12 @@ from rich.console import Console
 
 from dbly import __version__, drift, hooks, initializer, report
 from dbly.adapters import get_adapter
-from dbly.config import resolve_target
+from dbly.config import ConnectionConfig, load_profile, resolve_target
 from dbly.engine import detect_dialect
 from dbly.parsing import sqlglot_dialect
 from dbly.planner import build_plan
 from dbly.model import Plan, Severity
+from dbly.project import ProjectConfig, load_project
 from dbly.repo import WORKTREE, Repo
 
 app = typer.Typer(
@@ -48,6 +49,24 @@ def _main(
     pass
 
 
+def _open_repo(repo_path: Path, project: ProjectConfig) -> Repo:
+    return Repo(repo_path, object_root=project.object_root, extra_ignore=project.ignore)
+
+
+def _resolve_target(project: ProjectConfig, repo_path: Path, target: str) -> ConnectionConfig:
+    """Resolve ``--target``: a named target from ``dbly.toml`` [targets], else a profile path.
+
+    The project's ``environment`` fills in when the profile omits ``environment=``.
+    """
+    if target in project.targets:
+        cfg = load_profile(repo_path / project.targets[target])
+    else:
+        cfg = resolve_target(target)
+    if cfg.environment is None and project.environment:
+        cfg.environment = project.environment
+    return cfg
+
+
 def _decorations(repo_path: Path, plan: Plan) -> dict[str, str]:
     """Map each real ref in the plan to its git tag/branch names (for the plan header)."""
     try:
@@ -68,8 +87,9 @@ def _make_plan(
     repo_path: Path, target: str, from_ref: Optional[str], to_ref: str,
     *, worktree: bool = False,
 ) -> Plan:
-    repo = Repo(repo_path)
-    cfg = resolve_target(target)
+    project = load_project(repo_path)
+    repo = _open_repo(repo_path, project)
+    cfg = _resolve_target(project, repo_path, target)
     dialect = sqlglot_dialect(detect_dialect(cfg))
     adapter = get_adapter(cfg)
     try:
@@ -113,7 +133,7 @@ def plan(
         console.print(f"\n[dim]plan (YAML) written to {out}[/dim]")
     if sql:
         # state_table_ddl / record_deploy_sql are pure string builders — no DB connection.
-        adapter = get_adapter(resolve_target(target))
+        adapter = get_adapter(_resolve_target(load_project(repo_path), repo_path, target))
         try:
             script = report.plan_to_sql(
                 plan_obj,
@@ -165,8 +185,9 @@ def apply(
         console.print("[green]nothing to apply.[/green]")
         return
 
-    repo = Repo(repo_path)
-    cfg = resolve_target(target)
+    project = load_project(repo_path)
+    repo = _open_repo(repo_path, project)
+    cfg = _resolve_target(project, repo_path, target)
     adapter = get_adapter(cfg)
     try:
         _run_hooks(repo, "pre", py_interpreter)
@@ -204,12 +225,13 @@ def init(
 
     Greenfield only — brownfield (a handed-over database) skips this entirely.
     """
-    repo = Repo(repo_path)
+    project = load_project(repo_path)
+    repo = _open_repo(repo_path, project)
     scripts = initializer.discover_init_scripts(repo.root, init_dir)
     if not scripts:
         console.print(f"[yellow]no init scripts in {init_dir}/ — nothing to do.[/yellow]")
         return
-    adapter = get_adapter(resolve_target(init_target))
+    adapter = get_adapter(_resolve_target(project, repo_path, init_target))
     try:
         for s in scripts:
             adapter.run_init_script(s.read_text(encoding="utf-8"))
@@ -270,8 +292,9 @@ def check(
     ),
 ) -> None:
     """Detect drift: compare the desired state at <to> against the live database."""
-    repo = Repo(repo_path)
-    cfg = resolve_target(target)
+    project = load_project(repo_path)
+    repo = _open_repo(repo_path, project)
+    cfg = _resolve_target(project, repo_path, target)
     dialect = sqlglot_dialect(detect_dialect(cfg))
     adapter = get_adapter(cfg)
     try:
@@ -283,7 +306,7 @@ def check(
     finally:
         adapter.dispose()
 
-    if rep.clean:
+    if rep.clean and not rep.unreadable:
         console.print("[green]no drift — database matches the desired state.[/green]")
         return
 
@@ -298,7 +321,10 @@ def check(
         console.print(f"[yellow]changed[/yellow]   {kind.value} {oid}  (definition differs — advisory)")
     for kind, oid in rep.orphaned:
         console.print(f"[dim]orphaned[/dim]  {kind.value} {oid}  (in DB, not in repo)")
-    raise typer.Exit(code=1)
+    for kind, oid in rep.unreadable:
+        console.print(f"[dim]unreadable[/dim] {kind.value} {oid}  (columns could not be reflected — advisory)")
+    if not rep.clean:
+        raise typer.Exit(code=1)
 
 
 def _run_hooks(repo: Repo, phase: str, py_interpreter: str) -> None:
