@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import logging
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -40,13 +42,31 @@ def _version(value: bool) -> None:
         raise typer.Exit()
 
 
+def _quiet_parser_noise(debug: bool) -> None:
+    """Silence third-party parser/introspection chatter unless --debug.
+
+    sqlglot logs a WARNING (echoing the statement) every time it can't fully parse procedural
+    or engine-specific DDL and falls back to a raw command — expected and harmless for dbly,
+    but it floods real repos. SQLAlchemy likewise warns on types it doesn't model (e.g. PostGIS
+    ``geometry``), which dbly doesn't need for column identity.
+    """
+    if debug:
+        logging.getLogger("sqlglot").setLevel(logging.DEBUG)
+        return
+    logging.getLogger("sqlglot").setLevel(logging.ERROR)
+    warnings.filterwarnings("ignore", message="Did not recognize type")
+
+
 @app.callback()
 def _main(
     version: bool = typer.Option(  # noqa: ARG001
         False, "--version", callback=_version, is_eager=True, help="Show version and exit."
     ),
+    debug: bool = typer.Option(
+        False, "--debug", help="show parser/introspection diagnostics (sqlglot, SQLAlchemy)."
+    ),
 ) -> None:
-    pass
+    _quiet_parser_noise(debug)
 
 
 def _open_repo(repo_path: Path, project: ProjectConfig) -> Repo:

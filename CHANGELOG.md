@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-07-23
+
+### Changed
+
+- **Quiet by default.** sqlglot's per-statement fallback WARNINGs (it echoes any procedural /
+  engine-specific DDL it can't fully parse) and SQLAlchemy's "Did not recognize type" warnings
+  (e.g. PostGIS `geometry`) flooded the output on real repos. Both are now silenced; pass
+  `--debug` to see them again.
+
 ## [0.4.0] — 2026-07-23
 
 ### Added
