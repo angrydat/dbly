@@ -125,6 +125,10 @@ class MssqlAdapter(Adapter):
             parts.append(f"DEFAULT {col.default}")
         return " ".join(parts) + ";"
 
+    def modify_column_sql(self, table: ObjectId, col: Column) -> str:
+        # T-SQL ALTER COLUMN preserves nullability unless restated; type only here.
+        return f"ALTER TABLE {table} ALTER COLUMN {col.name} {col.type};"
+
     def apply(self, statements: list[str]) -> None:
         with self.engine.begin() as conn:
             for stmt in statements:

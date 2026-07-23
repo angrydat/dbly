@@ -80,6 +80,14 @@ class SqliteAdapter(Adapter):
             parts.append(f"DEFAULT {col.default}")
         return " ".join(parts) + ";"
 
+    def modify_column_sql(self, table: ObjectId, col: Column) -> str:
+        # SQLite cannot change a column's type in place — a rebuild is required. Emit a
+        # commented no-op so the (destructive, never auto-applied) step documents the limit.
+        return (
+            f"-- SQLite cannot ALTER COLUMN {table.name}.{col.name} to {col.type} "
+            "in place; rebuild the table manually."
+        )
+
     def apply(self, statements: list[str]) -> None:
         with self.engine.begin() as conn:
             for stmt in statements:

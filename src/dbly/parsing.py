@@ -11,6 +11,7 @@ applied verbatim per dialect by the adapter.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import sqlglot
@@ -191,6 +192,41 @@ def desired_columns(sql: str, *, dialect: str | None = None) -> list[Column]:
                 default = ckind.this.sql(dialect=dialect) if ckind.this is not None else None
         columns.append(Column(name=name, type=type_str, nullable=nullable, default=default))
     return columns
+
+
+_NUMERIC_TYPES = {"NUMBER", "NUMERIC", "DECIMAL", "DEC"}
+
+
+def canonical_type(type_str: str) -> str:
+    """Normalize a column type for cross-boundary comparison (desired vs. introspected).
+
+    The desired side is rendered by sqlglot (e.g. ``NUMBER(10)``); the actual side comes from
+    SQLAlchemy introspection (e.g. ``NUMBER(10, 0)``). Whitespace/case and an *omitted numeric
+    scale* are normalized so semantically-equal types compare equal — while a genuine
+    precision/scale change (``NUMBER`` → ``NUMBER(10)``) is preserved.
+
+    Honest scope: this is a string-level normalizer, not a type system. Exotic spellings that
+    differ across the sqlglot↔SQLAlchemy boundary may still compare unequal; a resulting
+    MODIFY step is flagged destructive (never auto-applied) and carries a warning, so a false
+    positive surfaces as a reviewable note rather than silent data loss.
+    """
+    s = " ".join(type_str.strip().upper().split())
+    # Drop introspection decorations that carry no shape info (e.g. SQL Server appends
+    # `COLLATE "SQL_Latin1_General_CP1_CI_AS"` to reflected string types).
+    s = re.split(r"\s+COLLATE\s+", s, maxsplit=1)[0].strip()
+    m = re.match(r"^([A-Z0-9_ ]+?)\s*\(([^)]*)\)\s*$", s)
+    if not m:
+        return s.replace(" ", "")
+    base = m.group(1).strip().replace(" ", "")
+    params = [p.strip() for p in m.group(2).split(",") if p.strip()]
+    if base in _NUMERIC_TYPES and len(params) == 1:
+        params.append("0")  # NUMBER(p) ≡ NUMBER(p,0) — scale defaults to 0
+    return f"{base}({','.join(params)})"
+
+
+def types_differ(desired: str, actual: str) -> bool:
+    """Whether a declared (desired) column type differs from the live (actual) one."""
+    return canonical_type(desired) != canonical_type(actual)
 
 
 def topological_order(objects: list[ParsedObject]) -> list[ParsedObject]:

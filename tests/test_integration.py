@@ -268,3 +268,103 @@ def test_init_runs_ordered_multistatement_scripts(tmp_path: Path):
     assert adapter.table_exists(None, "meta")
     assert adapter.table_exists(None, "audit")
     adapter.dispose()
+
+
+def test_type_change_produces_destructive_modify_step(tmp_path: Path):
+    from dbly.repo import WORKTREE  # noqa: F401 — import guard; used indirectly below
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text(
+        "CREATE TABLE IF NOT EXISTS kunde (id INTEGER, code VARCHAR(10));", encoding="utf-8"
+    )
+    ref1 = _commit(repo_root, "v1")
+
+    db = tmp_path / "types.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    repo = Repo(repo_root)
+    plan1 = build_plan(repo, adapter, from_ref=None, to_ref=ref1,
+                       target="sqlite", dialect="sqlite")
+    adapter.apply([s.sql for s in plan1.steps])
+    adapter.record_deploy(ref1, [])
+
+    # widen code VARCHAR(10) -> VARCHAR(20): a type change, must surface as a MODIFY step
+    (repo_root / "kunde.tbl").write_text(
+        "CREATE TABLE IF NOT EXISTS kunde (id INTEGER, code VARCHAR(20));", encoding="utf-8"
+    )
+    ref2 = _commit(repo_root, "v2")
+    plan2 = build_plan(repo, adapter, from_ref=ref1, to_ref=ref2,
+                       target="sqlite", dialect="sqlite")
+    mod = [s for s in plan2.steps if "modify column" in s.title]
+    assert len(mod) == 1
+    assert mod[0].severity is Severity.DESTRUCTIVE            # never auto-applied
+    assert "code" in mod[0].title
+    assert "→" in mod[0].note and "10" in mod[0].note and "20" in mod[0].note
+    adapter.dispose()
+
+
+def test_type_change_no_false_positive_when_unchanged(tmp_path: Path):
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text(
+        "CREATE TABLE IF NOT EXISTS kunde (id INTEGER, code VARCHAR(10));", encoding="utf-8"
+    )
+    ref1 = _commit(repo_root, "v1")
+    db = tmp_path / "stable.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    repo = Repo(repo_root)
+    plan1 = build_plan(repo, adapter, from_ref=None, to_ref=ref1,
+                       target="sqlite", dialect="sqlite")
+    adapter.apply([s.sql for s in plan1.steps])
+    adapter.record_deploy(ref1, [])
+    # re-plan the same schema against the live DB → no phantom modify step
+    plan2 = build_plan(repo, adapter, from_ref=None, to_ref=ref1,
+                       target="sqlite", dialect="sqlite")
+    assert not [s for s in plan2.steps if "modify column" in s.title]
+    adapter.dispose()
+
+
+def test_plan_against_worktree_sees_uncommitted_and_untracked(tmp_path: Path):
+    from dbly.repo import WORKTREE
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text(
+        "CREATE TABLE IF NOT EXISTS kunde (id INTEGER, name TEXT);", encoding="utf-8"
+    )
+    ref1 = _commit(repo_root, "v1")
+
+    db = tmp_path / "wt.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    repo = Repo(repo_root)
+    adapter.apply([s.sql for s in build_plan(
+        repo, adapter, from_ref=None, to_ref=ref1, target="sqlite", dialect="sqlite").steps])
+    adapter.record_deploy(ref1, [])
+
+    # edit an existing file (uncommitted) + add a brand-new untracked object file
+    (repo_root / "kunde.tbl").write_text(
+        "CREATE TABLE IF NOT EXISTS kunde (id INTEGER, name TEXT, email TEXT);", encoding="utf-8"
+    )
+    (repo_root / "v_kunde.vw").write_text(
+        "CREATE VIEW v_kunde AS SELECT id FROM kunde;", encoding="utf-8"
+    )
+    plan = build_plan(repo, adapter, from_ref=ref1, to_ref=WORKTREE,
+                      target="sqlite", dialect="sqlite")
+    titles = " ".join(s.title for s in plan.steps)
+    assert "email" in titles                       # uncommitted column edit is planned
+    assert any(s.kind.value == "view" for s in plan.steps)  # untracked new object is planned
+    adapter.dispose()
+
+
+def test_repo_ref_names_decorates_tag_and_branch(tmp_path: Path):
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text("CREATE TABLE kunde (id INTEGER);", encoding="utf-8")
+    sha = _commit(repo_root, "v1")
+    _git(repo_root, "tag", "v0.1")
+    repo = Repo(repo_root)
+    names = repo.ref_names(sha)
+    assert "v0.1" in names
+    assert any(n in ("main", "master") for n in names)  # the current branch points here too

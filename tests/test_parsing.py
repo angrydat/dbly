@@ -124,3 +124,39 @@ def test_plan_yaml_roundtrip():
     assert back.to_ref == "HEAD"
     assert back.steps[0].severity is Severity.ADDITIVE
     assert back.warnings == ["something"]
+
+
+def test_canonical_type_normalizes_numeric_scale_and_collation():
+    # omitted scale ≡ scale 0 (Oracle NUMBER(p) == NUMBER(p,0)); case/space-insensitive
+    assert parsing.canonical_type("NUMBER(10)") == parsing.canonical_type("number(10, 0)")
+    # a genuine precision change is preserved (bug: NUMBER → NUMBER(10) was missed)
+    assert parsing.types_differ("NUMBER", "NUMBER(10)")
+    assert parsing.types_differ("NUMBER(10)", "NUMBER(12)")
+    # SQL Server appends a COLLATE clause on reflected string types — not a real change
+    assert not parsing.types_differ("NVARCHAR(100)", 'NVARCHAR(100) COLLATE "SQL_Latin1_CI_AS"')
+    assert not parsing.types_differ("VARCHAR2(200)", "varchar2(200)")
+
+
+def test_render_plan_shows_step_note(capsys):
+    from rich.console import Console
+    plan = Plan(target="t", from_ref="abc", to_ref="HEAD")
+    plan.steps.append(
+        Step(
+            title="add NOT NULL column app.kunde.flag",
+            object_id=None,
+            kind=ObjectKind.TABLE,
+            severity=Severity.DESTRUCTIVE,
+            sql="ALTER TABLE app.kunde ADD flag NUMBER(1) NOT NULL;",
+            note="NOT NULL without default on existing table — unsafe",
+        )
+    )
+    report.render_plan(plan, Console(force_terminal=False, width=200))
+    out = capsys.readouterr().out
+    assert "NOT NULL without default" in out  # the hint is surfaced, not just stored
+
+
+def test_decorate_ref_git_style():
+    assert report._decorate_ref(None, None) == "∅"
+    assert report._decorate_ref("WORKTREE", None) == "working tree"
+    assert report._decorate_ref("9ff5e440abc", {"9ff5e440abc": "v0.1, main"}) == "v0.1, main (9ff5e440)"
+    assert report._decorate_ref("deadbeef", None) == "deadbeef"  # no names → raw sha

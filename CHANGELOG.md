@@ -7,6 +7,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-21
+
+### Added
+
+- **Plan against the working tree.** `dbly plan --worktree` (alias `--dirty`) and
+  `dbly check --worktree` diff the *working directory* — including uncommitted edits and
+  untracked new object files — instead of a git ref, for the fast edit→plan loop. Preview
+  only; `apply` still requires a real committed ref for the ledger.
+- **Git-style ref decoration.** `dbly status` and the plan header now show the tag/branch
+  names pointing at a SHA next to it — e.g. `deployed ref: v0.1, main (a712b631)`. The
+  ledger still stores only the SHA (for stable diffs); the names are resolved at display time.
+
+### Fixed
+
+- **Column type changes are now detected.** A changed column type (e.g. Oracle `NUMBER` →
+  `NUMBER(10)`) previously produced "nothing to do" — the diff matched columns by name only.
+  It now emits an `ALTER TABLE … MODIFY`/`ALTER COLUMN` step (flagged destructive, never
+  auto-applied) with a data-compatibility warning. Comparison is precision/scale-aware and
+  normalizes introspection noise (e.g. SQL Server `COLLATE`) to avoid false positives.
+- **`check` no longer reports live Oracle objects as "missing".** The Oracle adapter now
+  resolves its `default_schema` to the connected user and carries the owner on introspected
+  objects, so drift keys align with the desired side (previously the owner was dropped on the
+  live side, so every object looked missing even right after a successful `apply`).
+
+### Changed
+
+- The plan output now surfaces each step's **note inline** (e.g. *"NOT NULL without default
+  on existing table — unsafe"*), so *why* a step is flagged is visible without cross-checking
+  the warnings block.
+
 ## [0.2.0] — 2026-06-28
 
 ### Added

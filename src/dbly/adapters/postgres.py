@@ -111,6 +111,9 @@ class PostgresAdapter(Adapter):
             parts.append(f"DEFAULT {col.default}")
         return " ".join(parts) + ";"
 
+    def modify_column_sql(self, table: ObjectId, col: Column) -> str:
+        return f"ALTER TABLE {table} ALTER COLUMN {col.name} TYPE {col.type};"
+
     def apply(self, statements: list[str]) -> None:
         # transactional DDL → one atomic transaction
         with self.engine.begin() as conn:

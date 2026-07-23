@@ -174,6 +174,28 @@ def _plan_table(adapter: Adapter, plan: Plan, obj: ParsedObject, dialect: str | 
                 )
             )
 
+    # type changes: column present on both sides, but the declared type differs. Never
+    # auto-applied (a narrowing/incompatible change can truncate or fail) — flagged for review.
+    for col in desired:
+        actual_col = actual_by_key.get(col.key())
+        if actual_col is None or not parsing.types_differ(col.type, actual_col.type):
+            continue
+        plan.steps.append(
+            Step(
+                title=f"modify column {obj.id}.{col.name} type → {col.type}",
+                object_id=obj.id,
+                kind=ObjectKind.TABLE,
+                severity=Severity.DESTRUCTIVE,
+                sql=adapter.modify_column_sql(obj.id, col),
+                source_file=obj.source_file,
+                note=f"type change {actual_col.type} → {col.type} — may truncate/convert data",
+            )
+        )
+        plan.warnings.append(
+            f"{obj.id}.{col.name}: type change {actual_col.type} → {col.type} is not "
+            "auto-applied — review for data compatibility, then use --allow-destructive"
+        )
+
     # destructive: columns present in actual, gone from desired
     for col in actual:
         if col.key() not in desired_by_key:

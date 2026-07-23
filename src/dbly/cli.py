@@ -21,7 +21,7 @@ from dbly.engine import detect_dialect
 from dbly.parsing import sqlglot_dialect
 from dbly.planner import build_plan
 from dbly.model import Plan, Severity
-from dbly.repo import Repo
+from dbly.repo import WORKTREE, Repo
 
 app = typer.Typer(
     name="dbly",
@@ -48,13 +48,32 @@ def _main(
     pass
 
 
-def _make_plan(repo_path: Path, target: str, from_ref: Optional[str], to_ref: str) -> Plan:
+def _decorations(repo_path: Path, plan: Plan) -> dict[str, str]:
+    """Map each real ref in the plan to its git tag/branch names (for the plan header)."""
+    try:
+        repo = Repo(repo_path)
+    except ValueError:
+        return {}
+    out: dict[str, str] = {}
+    for ref in {plan.from_ref, plan.to_ref}:
+        if not ref or ref == WORKTREE:
+            continue
+        names = repo.ref_names(ref)
+        if names:
+            out[ref] = ", ".join(names)
+    return out
+
+
+def _make_plan(
+    repo_path: Path, target: str, from_ref: Optional[str], to_ref: str,
+    *, worktree: bool = False,
+) -> Plan:
     repo = Repo(repo_path)
     cfg = resolve_target(target)
     dialect = sqlglot_dialect(detect_dialect(cfg))
     adapter = get_adapter(cfg)
     try:
-        resolved_to = repo.resolve_ref(to_ref)
+        resolved_to = repo.resolve_ref(WORKTREE if worktree else to_ref)
         if from_ref is not None:
             resolved_from = repo.resolve_ref(from_ref)
         else:
@@ -80,10 +99,15 @@ def plan(
     sql: Optional[Path] = typer.Option(
         None, "--sql", help="write an executable SQL script for a hand/offline deploy."
     ),
+    worktree: bool = typer.Option(
+        False, "--worktree", "--dirty",
+        help="plan against the working tree (uncommitted + untracked object files), "
+             "not a git ref — for the fast edit→plan loop.",
+    ),
 ) -> None:
     """Compute and show the deployment plan."""
-    plan_obj = _make_plan(repo_path, target, from_ref, to)
-    report.render_plan(plan_obj, console)
+    plan_obj = _make_plan(repo_path, target, from_ref, to, worktree=worktree)
+    report.render_plan(plan_obj, console, ref_names=_decorations(repo_path, plan_obj))
     if out:
         out.write_text(report.plan_to_yaml(plan_obj), encoding="utf-8")
         console.print(f"\n[dim]plan (YAML) written to {out}[/dim]")
@@ -123,7 +147,7 @@ def apply(
     else:
         plan_obj = _make_plan(repo_path, target, from_ref, to)
 
-    report.render_plan(plan_obj, console)
+    report.render_plan(plan_obj, console, ref_names=_decorations(repo_path, plan_obj))
 
     destructive = [s for s in plan_obj.steps if s.severity is Severity.DESTRUCTIVE]
     if destructive and not allow_destructive:
@@ -203,12 +227,15 @@ def bootstrap(
 ) -> None:
     """Install into an empty database (no baseline — full apply)."""
     plan_obj = _make_plan(repo_path, target, None, to)
-    report.render_plan(plan_obj, console)
+    report.render_plan(plan_obj, console, ref_names=_decorations(repo_path, plan_obj))
     console.print("\n[dim]review, then run `dbly apply` to execute.[/dim]")
 
 
 @app.command()
-def status(target: str = typer.Option(..., "--target")) -> None:
+def status(
+    target: str = typer.Option(..., "--target"),
+    repo_path: Path = typer.Option(Path("."), "--repo", help="repository root (for ref names)."),
+) -> None:
     """Show the deployed ref recorded on the target."""
     cfg = resolve_target(target)
     adapter = get_adapter(cfg)
@@ -216,10 +243,17 @@ def status(target: str = typer.Option(..., "--target")) -> None:
         ref = adapter.get_deployed_ref()
     finally:
         adapter.dispose()
-    if ref:
-        console.print(f"deployed ref: [cyan]{ref}[/cyan]")
-    else:
+    if not ref:
         console.print("[yellow]no deploy recorded — database is unmanaged or empty.[/yellow]")
+        return
+    try:
+        names = Repo(repo_path).ref_names(ref)
+    except ValueError:
+        names = []  # not a git repo — SHA only
+    if names:
+        console.print(f"deployed ref: [cyan]{', '.join(names)}[/cyan] [dim]({ref[:8]})[/dim]")
+    else:
+        console.print(f"deployed ref: [cyan]{ref}[/cyan]")
 
 
 @app.command()
@@ -230,6 +264,10 @@ def check(
     orphans: bool = typer.Option(
         False, "--orphans", help="also report objects in the DB but not in the repo."
     ),
+    worktree: bool = typer.Option(
+        False, "--worktree", "--dirty",
+        help="compare the working tree (uncommitted + untracked) against the DB, not a git ref.",
+    ),
 ) -> None:
     """Detect drift: compare the desired state at <to> against the live database."""
     repo = Repo(repo_path)
@@ -239,7 +277,8 @@ def check(
     try:
         rep = drift.compute_drift(
             repo, adapter,
-            to_ref=repo.resolve_ref(to), dialect=dialect, include_orphans=orphans,
+            to_ref=repo.resolve_ref(WORKTREE if worktree else to),
+            dialect=dialect, include_orphans=orphans,
         )
     finally:
         adapter.dispose()

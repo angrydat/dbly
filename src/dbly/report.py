@@ -14,10 +14,23 @@ from rich.table import Table
 from dbly.model import Migration, ObjectId, ObjectKind, Plan, Severity, Step
 
 
-def render_plan(plan: Plan, console: Console) -> None:
+def _decorate_ref(ref: str | None, ref_names: dict[str, str] | None) -> str:
+    """Render a ref for the plan header: git-style ``<names> (<short-sha>)`` when known."""
+    if not ref:
+        return "∅"
+    if ref == "WORKTREE":
+        return "working tree"
+    if ref_names and ref_names.get(ref):
+        return f"{ref_names[ref]} ({ref[:8]})"
+    return ref
+
+
+def render_plan(
+    plan: Plan, console: Console, *, ref_names: dict[str, str] | None = None
+) -> None:
     console.print(
         f"[bold]Plan[/bold] for [cyan]{plan.target}[/cyan]  "
-        f"{plan.from_ref or '∅'} → {plan.to_ref}"
+        f"{_decorate_ref(plan.from_ref, ref_names)} → {_decorate_ref(plan.to_ref, ref_names)}"
     )
     if not plan.steps and not plan.warnings and not plan.migrations and not plan.baselined:
         console.print("[green]nothing to do — target is up to date[/green]")
@@ -38,11 +51,14 @@ def render_plan(plan: Plan, console: Console) -> None:
         table.add_column("step")
         for i, step in enumerate(plan.steps, 1):
             sev_style = "red" if step.severity is Severity.DESTRUCTIVE else "green"
+            title = step.title
+            if step.note:  # surface *why* a step is flagged (e.g. NOT NULL without default)
+                title += f"\n[dim]↳ {step.note}[/dim]"
             table.add_row(
                 str(i),
                 f"[{sev_style}]{step.severity.value}[/{sev_style}]",
                 step.kind.value,
-                step.title,
+                title,
             )
         console.print(table)
 

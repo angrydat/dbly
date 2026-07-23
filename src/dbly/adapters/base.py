@@ -71,6 +71,15 @@ class Adapter(abc.ABC):
         dialect-agnostic and delegates the rendering here.
         """
 
+    @abc.abstractmethod
+    def modify_column_sql(self, table: ObjectId, col: Column) -> str:
+        """Generate the ``ALTER TABLE … <MODIFY|ALTER COLUMN>`` that changes a column's type.
+
+        Oracle uses ``MODIFY``; Postgres uses ``ALTER COLUMN … TYPE``; T-SQL uses
+        ``ALTER COLUMN``. SQLite cannot change a column's type in place and returns a
+        commented no-op (a type change there needs a manual table rebuild).
+        """
+
     # --- execution ---------------------------------------------------------------------
     @abc.abstractmethod
     def apply(self, statements: list[str]) -> None:

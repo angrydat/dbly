@@ -89,6 +89,22 @@ class OracleAdapter(Adapter):
         # unquoted Oracle identifiers are upper-cased on storage
         return ident.upper() if ident else ident
 
+    @property
+    def default_schema(self) -> str | None:  # type: ignore[override]
+        """The connected user — Oracle's implicit schema for unqualified objects.
+
+        Resolved from the live session (``SELECT USER``) and cached. Drift matching uses this
+        so a repo object under folder ``dbb`` aligns with the live ``DBB``-owned object;
+        without it every object read back by ``inventory()`` looked "missing" (owner dropped
+        on one side of the key). Same source as ``inventory()``'s ``owner = USER`` filter.
+        """
+        cached = getattr(self, "_ds_cache", None)
+        if cached is None:
+            with self.engine.connect() as conn:
+                cached = conn.exec_driver_sql("SELECT USER FROM dual").scalar()
+            self._ds_cache = cached
+        return cached
+
     def table_exists(self, schema: str | None, name: str) -> bool:
         return inspect(self.engine).has_table(self._norm(name), schema=self._norm(schema))
 
@@ -139,6 +155,7 @@ class OracleAdapter(Adapter):
             "('FUNCTION','PROCEDURE','TRIGGER','PACKAGE','PACKAGE BODY','TYPE') "
             "ORDER BY name, type, line"
         )
+        owner = self.default_schema  # objects are filtered by owner = USER — carry it on the id
         found: dict[str, LiveObject] = {}
         src_text: dict[str, list[str]] = {}
         with self.engine.connect() as conn:
@@ -146,13 +163,13 @@ class OracleAdapter(Adapter):
                 kind = self._TYPEMAP.get(otype)
                 if kind is None:
                     continue
-                obj = LiveObject(kind, ObjectId(None, name))
+                obj = LiveObject(kind, ObjectId(owner, name))
                 found[obj.key()] = obj
             for name, otype, line in conn.execute(sources):
                 kind = self._TYPEMAP.get(otype)
                 if kind is None:
                     continue
-                key = LiveObject(kind, ObjectId(None, name)).key()
+                key = LiveObject(kind, ObjectId(owner, name)).key()
                 src_text.setdefault(key, []).append(line or "")
         for key, lines in src_text.items():
             if key in found:
@@ -166,6 +183,9 @@ class OracleAdapter(Adapter):
         if not col.nullable:
             parts.append("NOT NULL")
         return " ".join(parts) + ";"
+
+    def modify_column_sql(self, table: ObjectId, col: Column) -> str:
+        return f"ALTER TABLE {table} MODIFY {col.name} {col.type};"
 
     def apply(self, statements: list[str]) -> None:
         # No transactional rollback (DDL auto-commits). Sequential; commit covers any DML.

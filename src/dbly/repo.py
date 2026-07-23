@@ -17,6 +17,7 @@ from dbly.model import ChangeType
 
 _SQL_SUFFIXES = {".sql", ".tbl", ".vw", ".prc", ".fnc", ".pkg", ".trg", ".typ", ".ddl"}
 MIGRATIONS_DIR = "migrations"  # run-once scripts — not declarative objects
+WORKTREE = "WORKTREE"  # sentinel `to_ref`: plan/check against the working tree, not a git ref
 
 
 @dataclass(slots=True)
@@ -61,15 +62,39 @@ class Repo:
         """A deployable declarative object file (SQL, not a migration, not ignored)."""
         return self._is_sql(rel) and not self._is_migration(rel) and not self.is_ignored(rel)
 
+    def _untracked_files(self) -> list[Path]:
+        """New files in the working tree not yet added to git (``git status`` "??")."""
+        raw = self._git("ls-files", "--others", "--exclude-standard", "-z")
+        return [Path(n) for n in filter(None, raw.split("\0"))]
+
+    def _worktree_paths(self) -> list[Path]:
+        """Every file in the working tree: tracked (``ls-files``) + untracked new files."""
+        raw = self._git("ls-files", "-z")
+        tracked = [Path(n) for n in filter(None, raw.split("\0"))]
+        return tracked + self._untracked_files()
+
     def changed_files(self, from_ref: str | None, to_ref: str) -> list[FileChange]:
         """Files changed between two refs (or the full tree at ``to_ref`` for bootstrap)."""
         if from_ref is None:
             return [FileChange(p, ChangeType.ADDED) for p in self.list_files(to_ref)]
+        if to_ref == WORKTREE:
+            # `git diff <from>` (no second ref) diffs the ref against the working tree
+            # (staged + unstaged tracked changes); untracked new files are added separately.
+            changes = self._parse_name_status(
+                self._git("diff", "--name-status", "-z", from_ref)
+            )
+            known = {c.path for c in changes}
+            for p in self._untracked_files():
+                if self._is_object(p) and p not in known:
+                    changes.append(FileChange(p, ChangeType.ADDED))
+            return changes
         raw = self._git("diff", "--name-status", "-z", f"{from_ref}..{to_ref}")
         return self._parse_name_status(raw)
 
     def list_files(self, ref: str) -> list[Path]:
         """All deployable declarative object files present at ``ref`` (excludes migrations)."""
+        if ref == WORKTREE:
+            return [p for p in self._worktree_paths() if self._is_object(p)]
         raw = self._git("ls-tree", "-r", "--name-only", "-z", ref)
         return [Path(n) for n in filter(None, raw.split("\0")) if self._is_object(Path(n))]
 
@@ -78,11 +103,12 @@ class Repo:
 
         Id is the filename; order is lexicographic, so prefix files ``0001_…`` / a timestamp.
         """
-        raw = self._git("ls-tree", "-r", "--name-only", "-z", ref)
-        out = [
-            Path(n) for n in filter(None, raw.split("\0"))
-            if self._is_migration(Path(n)) and Path(n).suffix.lower() == ".sql"
-        ]
+        if ref == WORKTREE:
+            names = self._worktree_paths()
+        else:
+            raw = self._git("ls-tree", "-r", "--name-only", "-z", ref)
+            names = [Path(n) for n in filter(None, raw.split("\0"))]
+        out = [p for p in names if self._is_migration(p) and p.suffix.lower() == ".sql"]
         return [(p.name, p) for p in sorted(out, key=lambda p: p.as_posix())]
 
     def _parse_name_status(self, raw: str) -> list[FileChange]:
@@ -111,12 +137,33 @@ class Repo:
         """Resolve a symbolic ref (HEAD, a tag, a branch) to its immutable commit SHA.
 
         The ledger and plan headers store the SHA, not ``HEAD`` — so a later ``--from``
-        diff is stable regardless of where HEAD has since moved.
+        diff is stable regardless of where HEAD has since moved. The ``WORKTREE`` sentinel
+        has no SHA and is returned unchanged.
         """
+        if ref == WORKTREE:
+            return WORKTREE
         return self._git("rev-parse", ref).strip()
+
+    def ref_names(self, sha: str) -> list[str]:
+        """Tag and branch names pointing exactly at ``sha`` — for git-style plan/status
+        decorations (e.g. ``v0.1, main``). Display-only; the ledger still stores the SHA."""
+        names: list[str] = []
+        try:
+            names += [n for n in self._git("tag", "--points-at", sha).split() if n]
+            names += [
+                n for n in self._git(
+                    "branch", "--points-at", sha, "--format=%(refname:short)"
+                ).split() if n
+            ]
+        except subprocess.CalledProcessError:
+            return []
+        seen: set[str] = set()
+        return [n for n in names if not (n in seen or seen.add(n))]
 
     def read_at(self, ref: str, rel: Path) -> str:
         """File content at a given ref (the *desired* state)."""
+        if ref == WORKTREE:
+            return (self.root / rel).read_text(encoding="utf-8")
         return self._git("show", f"{ref}:{rel.as_posix()}")
 
     def schema_for(self, rel: Path) -> str | None:
