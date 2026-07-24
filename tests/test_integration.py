@@ -587,3 +587,26 @@ def test_plan_creates_missing_schema_first(tmp_path: Path, monkeypatch):
     assert titles.index("create schema download") < next(
         i for i, t in enumerate(titles) if "cache" in t)          # schema before the table
     adapter.dispose()
+
+
+def test_tables_ordered_by_fk_dependency(tmp_path: Path):
+    """A table with an inline FK is created after the table it references (fresh target)."""
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    # file order puts the dependent (cache) first — the planner must reorder
+    (repo_root / "cache.tbl").write_text(
+        "CREATE TABLE cache (id INTEGER PRIMARY KEY, "
+        "paket_id INTEGER NOT NULL REFERENCES paket(paket_id));", encoding="utf-8")
+    (repo_root / "paket.tbl").write_text(
+        "CREATE TABLE paket (paket_id INTEGER PRIMARY KEY);", encoding="utf-8")
+    ref = _commit(repo_root, "v1")
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(tmp_path / "fk.db")))
+    repo = Repo(repo_root)
+    plan = build_plan(repo, adapter, from_ref=None, to_ref=ref, target="sqlite", dialect="sqlite")
+    order = [s.title for s in plan.steps if s.kind.value == "table"]
+    assert order.index("create table paket") < order.index("create table cache")
+    # and it actually applies cleanly (FK target exists first)
+    adapter.apply([s.sql for s in plan.steps])
+    assert adapter.table_exists(None, "cache") and adapter.table_exists(None, "paket")
+    adapter.dispose()

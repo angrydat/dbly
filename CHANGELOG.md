@@ -7,7 +7,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.12.0] — 2026-07-25
+## [0.13.0] — 2026-07-25
+
+### Fixed
+
+- **Tables are created in FK-dependency order.** A table with an inline
+  `REFERENCES other_table` was emitted in file order, so on a fresh target the referencing
+  table could be created before its target (`relation "…" does not exist`). Tables are now
+  topologically sorted by their inter-table foreign keys, like replaceable objects already were.
+
+### Added
+
+- **Pre-flight dependency warning.** `plan` warns when a table's FK target is neither in the
+  deploy nor already in the target — e.g. a cross-schema FK left out by `--schema`/`--path` —
+  instead of failing deep in `apply` with a cryptic error.
+- **Clean `apply` failure.** A failed statement now prints a one-line cause (and whether the
+  transaction rolled back) rather than a full Python traceback.
 
 ### Fixed
 

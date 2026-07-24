@@ -92,6 +92,21 @@ def build_plan(
                 )
             )
 
+    # Pre-flight: warn about inter-table FK targets that are neither in this deploy nor already
+    # in the target — e.g. a cross-schema FK when the deploy is scoped with --schema/--path.
+    # Better an upfront, actionable warning than a cryptic "relation … does not exist" mid-apply.
+    deploy_keys = {o.id.key() for o in (*sequences, *tables, *indexes, *replaceable)}
+    for t in tables:
+        for dep in sorted(t.depends_on):
+            if dep in deploy_keys:
+                continue
+            dep_schema, _, dep_name = dep.rpartition(".")
+            if not adapter.table_exists(dep_schema or None, dep_name):
+                plan.warnings.append(
+                    f"{t.id}: references {dep}, which is not in this deploy and not in the "
+                    "target — create it first (or widen --schema/--path)."
+                )
+
     # Tables touched by a pending migration are migration-managed for this deploy — the
     # migration reshapes them at apply time, so the (plan-time) additive diff must defer.
     migration_tables: set[str] = set()
@@ -100,7 +115,9 @@ def build_plan(
 
     for obj in sequences:
         _plan_create_if_missing(adapter, plan, obj)
-    for obj in tables:
+    # Tables are ordered by inter-table FK dependencies (inline ``REFERENCES``), not file order,
+    # so a referenced table is created before the one referencing it on a fresh target.
+    for obj in parsing.topological_order(tables):
         if obj.id.name.lower() in migration_tables:
             plan.warnings.append(
                 f"{obj.id}: managed by a pending migration — additive diff skipped this deploy"

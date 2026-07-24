@@ -260,6 +260,15 @@ def apply(
                 console.print(f"  [green]✓[/green] {s.title}[green]  OK[/green]")
         adapter.record_deploy(plan_obj.to_ref, migration_ids=[])
         _run_hooks(repo, "post", py_interpreter)
+    except Exception as exc:  # noqa: BLE001 — surface a concise cause, not a stack trace
+        msg = str(getattr(exc, "orig", exc)).strip().splitlines()[0]
+        err.print(f"\n[red]apply failed:[/red] {msg}")
+        if adapter.transactional_ddl:
+            err.print("[dim]the transaction was rolled back — the target is unchanged.[/dim]")
+        else:
+            err.print("[yellow]DDL auto-commits on this engine — earlier steps may have "
+                      "been applied.[/yellow]")
+        raise typer.Exit(code=1) from exc
     finally:
         adapter.dispose()
     console.print(
