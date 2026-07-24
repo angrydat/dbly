@@ -538,3 +538,29 @@ def test_check_show_diff_reveals_real_view_change(tmp_path: Path):
     out = con.file.getvalue()
     assert "WHERE" in out and ("+" in out)   # the added filter shows in the diff
     adapter.dispose()
+
+
+def test_grants_are_apply_only_not_drift(tmp_path: Path):
+    from dbly.drift import compute_drift
+    from dbly.model import ObjectKind
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text("CREATE TABLE kunde (id INTEGER);", encoding="utf-8")
+    (repo_root / "grants.sql").write_text(
+        "GRANT SELECT ON kunde TO reader;\nGRANT INSERT ON kunde TO writer;", encoding="utf-8")
+    ref = _commit(repo_root, "v1")
+    db = tmp_path / "g.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    repo = Repo(repo_root)
+    # deploy the table only (grants aren't introspectable in sqlite anyway)
+    plan = build_plan(repo, adapter, from_ref=None, to_ref=ref, target="sqlite", dialect="sqlite")
+    adapter.apply([s.sql for s in plan.steps if s.kind is not ObjectKind.GRANT])
+    adapter.record_deploy(ref, [])
+
+    rep = compute_drift(repo, adapter, to_ref=ref, dialect="sqlite")
+    # grants must NOT show as missing drift, but must be surfaced as apply-only
+    assert not any(k is ObjectKind.GRANT for k, _ in rep.missing)
+    assert any(k is ObjectKind.GRANT for k, _ in rep.apply_only)
+    assert rep.clean                      # apply-only never makes the check dirty
+    adapter.dispose()

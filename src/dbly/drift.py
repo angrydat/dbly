@@ -23,6 +23,10 @@ from dbly.repo import Repo
 # trigger) can't be canonicalized across the repo↔DB boundary — sqlglot doesn't parse PL/*,
 # so those comparisons are advisory-only and off by default (they produced constant noise).
 _PROCEDURAL_KINDS = {ObjectKind.FUNCTION, ObjectKind.PROCEDURE, ObjectKind.TRIGGER}
+# Deployed on every apply but not introspectable as state — comparing them is meaningless, so
+# check never reports them as drift (it would always say "missing"). GRANTs live in a collected
+# grants.sql; their effect matters, so `apply` still runs them — `check` just stays quiet.
+_APPLY_ONLY_KINDS = {ObjectKind.GRANT}
 _LEDGER_KEY = "table:dbly_state"
 
 
@@ -41,12 +45,13 @@ class DriftReport:
     definitions: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)  # views (reliable)
     advisory: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)     # procedural (unreliable)
     unreadable: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)   # reflection failed
+    apply_only: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)   # e.g. grants — run, not verified
     # key "kind:oid" -> (desired_sql, live_definition), populated when include_diff (for --show-diff)
     diffs: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     @property
     def clean(self) -> bool:
-        # advisory/unreadable are informational — they never make a check "dirty" on their own.
+        # advisory/unreadable/apply_only are informational — never "dirty" on their own.
         return not (self.missing or self.orphaned or self.columns or self.definitions)
 
 
@@ -83,6 +88,9 @@ def compute_drift(
 
     report = DriftReport()
     for key, obj in desired.items():
+        if obj.kind in _APPLY_ONLY_KINDS:
+            report.apply_only.append((obj.kind, obj.id))  # run on apply, not verified here
+            continue
         if key not in live:
             report.missing.append((obj.kind, obj.id))
 

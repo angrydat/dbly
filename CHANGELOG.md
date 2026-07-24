@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-24
+
+### Changed
+
+- **Grants are "apply-only" in `check`.** GRANT statements (typically collected in a
+  `grants.sql`) aren't introspectable as state, so `check` used to report them as permanently
+  "missing". They are now excluded from drift and shown as a one-line note ("N grant
+  statement(s) run on every apply but not verified by check"). `plan`/`apply` still execute
+  them unchanged — grants matter, they just can't be *verified* by a drift check.
+
 ## [0.10.0] — 2026-07-24
 
 ### Changed

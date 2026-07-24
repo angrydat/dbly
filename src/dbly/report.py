@@ -156,8 +156,17 @@ def render_drift(
         head += f"  [dim](scope: {scope})[/dim]"
     console.print(head)
 
+    def _apply_only_note() -> None:
+        if rep.apply_only:
+            kinds = sorted({k.value for k, _ in rep.apply_only})
+            console.print(
+                f"\n[dim]{len(rep.apply_only)} {'/'.join(kinds)} statement(s) run on every "
+                "apply but not verified by check.[/dim]"
+            )
+
     if rep.clean and not rep.unreadable and not rep.advisory:
         console.print("[green]✓ in sync — the database matches the desired state.[/green]")
+        _apply_only_note()
         return
 
     # (marker, style, action, kind, target, dim, diff_key)
@@ -201,6 +210,7 @@ def render_drift(
 
     if show_diff and not rep.diffs:
         console.print("\n[dim](no diffable definitions — run without --show-diff)[/dim]")
+    _apply_only_note()
     if not rep.advisory:
         console.print(
             "\n[dim]procedural bodies (function/procedure/trigger) are compared "
