@@ -247,20 +247,25 @@ def apply(
         # baseline (bootstrap): record migrations as applied without running them
         for mid in plan_obj.baselined:
             adapter.record_migration(plan_obj.to_ref, mid)
+        console.print("[green]✓[/green] Applying changes...")
         # explicit migrations run first — they reshape the schema before reconciliation
         for m in plan_obj.migrations:
             adapter.run_init_script(m.sql)  # engine-aware multi-statement / PL-SQL runner
             adapter.record_migration(plan_obj.to_ref, m.id)
-            console.print(f"[magenta]migration[/magenta] applied {m.id}")
+            console.print(f"  [green]✓[/green] migration {m.id}[green]  OK[/green]")
+        applied_steps = [s for s in plan_obj.steps if s.sql in statements]
         if statements:
             adapter.apply(statements)
+            for s in applied_steps:
+                console.print(f"  [green]✓[/green] {s.title}[green]  OK[/green]")
         adapter.record_deploy(plan_obj.to_ref, migration_ids=[])
         _run_hooks(repo, "post", py_interpreter)
     finally:
         adapter.dispose()
     console.print(
-        f"[green]applied[/green] {len(statements)} step(s), "
-        f"{len(plan_obj.migrations)} migration(s); deployed ref → {plan_obj.to_ref}"
+        f"\n[green]✓ Apply complete![/green] {len(statements)} step(s), "
+        f"{len(plan_obj.migrations)} migration(s); deployed ref → "
+        f"[cyan]{plan_obj.to_ref[:8] if len(plan_obj.to_ref) >= 8 else plan_obj.to_ref}[/cyan]"
     )
 
 
@@ -338,6 +343,11 @@ def check(
     orphans: bool = typer.Option(
         False, "--orphans", help="also report objects in the DB but not in the repo."
     ),
+    advisory: bool = typer.Option(
+        False, "--advisory",
+        help="also report procedural definition drift (function/procedure/trigger) — "
+             "unreliable across engines, off by default.",
+    ),
     worktree: bool = typer.Option(
         False, "--worktree", "--dirty",
         help="compare the working tree (uncommitted + untracked) against the DB, not a git ref.",
@@ -358,7 +368,8 @@ def check(
     adapter = get_adapter(cfg)
     try:
         rep = drift.compute_drift(
-            repo, adapter, to_ref=resolved_to, dialect=dialect, include_orphans=orphans,
+            repo, adapter, to_ref=resolved_to, dialect=dialect,
+            include_orphans=orphans, include_advisory=advisory,
         )
     finally:
         adapter.dispose()

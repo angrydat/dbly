@@ -19,7 +19,10 @@ from dbly.adapters.base import Adapter
 from dbly.model import ObjectId, ObjectKind
 from dbly.repo import Repo
 
-_HASHED_KINDS = {ObjectKind.VIEW, ObjectKind.FUNCTION, ObjectKind.PROCEDURE, ObjectKind.TRIGGER}
+# View bodies compare reliably (SELECT vs SELECT). Procedural bodies (function/procedure/
+# trigger) can't be canonicalized across the repo↔DB boundary — sqlglot doesn't parse PL/*,
+# so those comparisons are advisory-only and off by default (they produced constant noise).
+_PROCEDURAL_KINDS = {ObjectKind.FUNCTION, ObjectKind.PROCEDURE, ObjectKind.TRIGGER}
 _LEDGER_KEY = "table:dbly_state"
 
 
@@ -35,11 +38,13 @@ class DriftReport:
     missing: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)
     orphaned: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)
     columns: list[ColumnDrift] = field(default_factory=list)
-    definitions: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)
-    unreadable: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)  # reflection failed (advisory)
+    definitions: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)  # views (reliable)
+    advisory: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)     # procedural (unreliable)
+    unreadable: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)   # reflection failed
 
     @property
     def clean(self) -> bool:
+        # advisory/unreadable are informational — they never make a check "dirty" on their own.
         return not (self.missing or self.orphaned or self.columns or self.definitions)
 
 
@@ -58,6 +63,7 @@ def compute_drift(
     to_ref: str,
     dialect: str | None,
     include_orphans: bool = False,
+    include_advisory: bool = False,
 ) -> DriftReport:
     ds = adapter.default_schema
 
@@ -102,10 +108,21 @@ def compute_drift(
             if added or removed:
                 report.columns.append(ColumnDrift(obj.id, added, removed))
 
+    # views — reliable: reduce both sides to the SELECT body and compare (fixes the old
+    # "every view drifts" false positive from hashing CREATE-VIEW vs a bare SELECT).
     for key, obj in desired.items():
-        if obj.kind in _HASHED_KINDS and key in live and live[key].source_hash:
-            want = parsing.canonical_hash(obj.sql, dialect=dialect)
-            if want and want != live[key].source_hash:
+        if obj.kind is ObjectKind.VIEW and key in live and live[key].definition:
+            want = parsing.canonical_view_query(obj.sql, dialect=dialect)
+            have = parsing.canonical_view_query(live[key].definition, dialect=dialect)
+            if want and have and want != have:
                 report.definitions.append((obj.kind, obj.id))
+
+    # procedural — advisory only (canonicalization is unreliable across the boundary).
+    if include_advisory:
+        for key, obj in desired.items():
+            if obj.kind in _PROCEDURAL_KINDS and key in live and live[key].source_hash:
+                want = parsing.canonical_hash(obj.sql, dialect=dialect)
+                if want and want != live[key].source_hash:
+                    report.advisory.append((obj.kind, obj.id))
 
     return report

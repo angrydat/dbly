@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-07-24
+
+### Fixed
+
+- **Views no longer always report drift.** `check` compared a hash of the repo's full
+  `CREATE VIEW … AS SELECT …` against a hash of the database's bare `SELECT` (Postgres
+  `pg_get_viewdef`), so *every* view looked changed. Both sides are now reduced to the SELECT
+  body and compared consistently — an identical view reports clean.
+
+### Changed
+
+- **Terraform-style `plan` / `apply` output.** `plan` now prints `Plan: N to change, M to
+  destroy.` followed by aligned rows with action markers (`+` create/add, `~` modify,
+  `!` unsafe, `-` drop), kind and target. `apply` reports each step as `✓ … OK` and finishes
+  with `✓ Apply complete!`.
+- **Procedural definition drift is advisory and off by default.** Function/procedure/trigger
+  bodies cannot be canonicalized reliably across the repo↔DB boundary (sqlglot does not parse
+  PL/*), so they produced constant false positives. They are now shown only with
+  `dbly check --advisory` and never make a check "dirty" (non-zero exit) on their own.
+
 ## [0.6.0] — 2026-07-24
 
 ### Added

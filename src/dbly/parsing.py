@@ -162,6 +162,27 @@ def canonical_hash(sql: str | None, *, dialect: str | None = None) -> str | None
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
 
 
+def canonical_view_query(sql: str | None, *, dialect: str | None = None) -> str | None:
+    """Hash of a view's SELECT body, tolerant of the CREATE-VIEW wrapper being present or not.
+
+    The two sides of a view comparison arrive shaped differently: the repo file is a full
+    ``CREATE [OR REPLACE] VIEW … AS SELECT …`` while Postgres' ``pg_get_viewdef`` returns only
+    the ``SELECT``. Hashing the raw text on each side made *every* view look drifted. Here both
+    sides are reduced to just the query and rendered the same way, so an identical view matches.
+    """
+    if not sql or not sql.strip():
+        return None
+    try:
+        parsed = sqlglot.parse_one(sql, read=dialect)
+        query = parsed.expression if isinstance(parsed, exp.Create) else parsed
+        if query is None:
+            return None
+        canon = query.sql(dialect=dialect, normalize=True, pretty=False).lower()
+    except Exception:  # noqa: BLE001 — unparseable → text fallback (still consistent both sides)
+        canon = " ".join(sql.lower().split())
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+
+
 def desired_columns(sql: str, *, dialect: str | None = None) -> list[Column]:
     """Extract column definitions from a ``CREATE TABLE`` statement (the desired state).
 

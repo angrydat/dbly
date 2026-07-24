@@ -479,3 +479,31 @@ def test_export_roundtrip_and_cross_dialect(tmp_path: Path):
     adapter.ensure_state_table()
     assert "dbly_state" not in export_ddl(adapter, source_dialect="sqlite").ddl
     adapter.dispose()
+
+
+def test_view_drift_only_when_body_actually_differs(tmp_path: Path):
+    """Regression: identical views must NOT report drift (old code hashed CREATE-VIEW vs SELECT)."""
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text("CREATE TABLE kunde (id INTEGER, name TEXT);", encoding="utf-8")
+    (repo_root / "v_kunde.vw").write_text(
+        "CREATE VIEW v_kunde AS SELECT id, name FROM kunde;", encoding="utf-8")
+    ref1 = _commit(repo_root, "v1")
+    db = tmp_path / "vd.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    repo = Repo(repo_root)
+    adapter.apply([s.sql for s in build_plan(repo, adapter, from_ref=None, to_ref=ref1,
+                   target="sqlite", dialect="sqlite").steps])
+
+    # unchanged view → no definition drift
+    rep = compute_drift(repo, adapter, to_ref=ref1, dialect="sqlite")
+    assert not rep.definitions, [str(o) for _, o in rep.definitions]
+
+    # genuinely changed view body → exactly one definition drift
+    (repo_root / "v_kunde.vw").write_text(
+        "CREATE VIEW v_kunde AS SELECT id, name FROM kunde WHERE id > 0;", encoding="utf-8")
+    ref2 = _commit(repo_root, "v2")
+    rep2 = compute_drift(repo, adapter, to_ref=ref2, dialect="sqlite")
+    assert [o.name for _, o in rep2.definitions] == ["v_kunde"]
+    adapter.dispose()

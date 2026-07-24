@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 import yaml
 from rich.console import Console
-from rich.table import Table
 
 from dbly.model import Migration, ObjectId, ObjectKind, Plan, Severity, Step
 
@@ -29,6 +28,35 @@ def _decorate_ref(ref: str | None, ref_names: dict[str, str] | None) -> str:
     return ref
 
 
+_VERBS = ("create", "add", "modify", "apply", "drop", "alter")
+
+
+def _step_row(step: Step) -> tuple[str, str, str, str, str]:
+    """Decompose a step into (marker, style, action, kind, target) for a Terraform-style row."""
+    low = step.title.lower()
+    if "drop" in low or "delete" in low:
+        marker, style = "-", "red"
+    elif "modify" in low or "alter" in low:
+        marker, style = "~", "yellow"
+    elif step.severity is Severity.DESTRUCTIVE:
+        marker, style = "!", "red"
+    else:
+        marker, style = "+", "green"
+
+    action = next((v for v in _VERBS if low.startswith(v)), step.title.split()[0])
+    action = "replace" if action == "apply" else action     # replaceable objects re-apply
+
+    # target: the object; for column-level steps the column lives in the title, not object_id.
+    kind = step.kind.value
+    if "column" in low:
+        kind = "column"                                      # ALTER targets a table, but show "column"
+        toks = step.title.split()
+        target = toks[toks.index("column") + 1] if "column" in toks else str(step.object_id or "")
+    else:
+        target = str(step.object_id) if step.object_id else step.title.split()[-1]
+    return marker, style, action, kind, target
+
+
 def render_plan(
     plan: Plan, console: Console, *, ref_names: dict[str, str] | None = None
 ) -> None:
@@ -37,34 +65,31 @@ def render_plan(
         f"{_decorate_ref(plan.from_ref, ref_names)} → {_decorate_ref(plan.to_ref, ref_names)}"
     )
     if not plan.steps and not plan.warnings and not plan.migrations and not plan.baselined:
-        console.print("[green]nothing to do — target is up to date[/green]")
+        console.print("[green]✓ nothing to do — target is up to date[/green]")
         return
 
     for m in plan.migrations:
-        console.print(f"[magenta]migration[/magenta] run  {m.id}")
+        console.print(f"[magenta]→ migration[/magenta] run  {m.id}")
     if plan.baselined:
         console.print(
             f"[dim]migration baseline (recorded, not run): {', '.join(plan.baselined)}[/dim]"
         )
 
     if plan.steps:
-        table = Table(show_header=True, header_style="bold")
-        table.add_column("#", justify="right", style="dim")
-        table.add_column("severity")
-        table.add_column("kind")
-        table.add_column("step")
-        for i, step in enumerate(plan.steps, 1):
-            sev_style = "red" if step.severity is Severity.DESTRUCTIVE else "green"
-            title = step.title
-            if step.note:  # surface *why* a step is flagged (e.g. NOT NULL without default)
-                title += f"\n[dim]↳ {step.note}[/dim]"
-            table.add_row(
-                str(i),
-                f"[{sev_style}]{step.severity.value}[/{sev_style}]",
-                step.kind.value,
-                title,
+        n_destroy = sum(1 for s in plan.steps if "drop" in s.title.lower())
+        console.print(
+            f"\n[bold]Plan:[/bold] {len(plan.steps)} to change, {n_destroy} to destroy.\n"
+        )
+        rows = [_step_row(s) for s in plan.steps]
+        w_action = max((len(r[2]) for r in rows), default=6)
+        w_kind = max((len(r[3]) for r in rows), default=8)
+        for (marker, style, action, kind, target), step in zip(rows, plan.steps):
+            console.print(
+                f"  [{style}]{marker}[/{style}] [{style}]{action:<{w_action}}[/{style}]  "
+                f"[dim]{kind:<{w_kind}}[/dim]  {target}"
             )
-        console.print(table)
+            if step.note:  # surface *why* a step is flagged (e.g. NOT NULL without default)
+                console.print(f"      [dim]↳ {step.note}[/dim]")
 
     if plan.warnings:
         console.print("\n[bold yellow]Warnings[/bold yellow]")
@@ -105,14 +130,16 @@ def render_drift(
     n_add = sum(len(cd.added) for cd in rep.columns)
     n_del = sum(len(cd.removed) for cd in rep.columns)
     tally = [
-        f"[yellow]{len(rep.missing)}[/yellow] to create",
+        f"[yellow]{len(rep.missing)}[/yellow] to create" if rep.missing else None,
         f"[red]{len(rep.orphaned)}[/red] orphaned" if rep.orphaned else None,
         f"[yellow]{len(rep.columns)}[/yellow] tables with column drift"
         f" ([green]+{n_add}[/green]/[red]−{n_del}[/red])" if rep.columns else None,
-        f"[yellow]{len(rep.definitions)}[/yellow] changed definitions" if rep.definitions else None,
+        f"[yellow]{len(rep.definitions)}[/yellow] changed views" if rep.definitions else None,
+        f"[dim]{len(rep.advisory)} advisory[/dim]" if rep.advisory else None,
         f"[dim]{len(rep.unreadable)} unreadable[/dim]" if rep.unreadable else None,
     ]
-    console.print("  " + "  ·  ".join(t for t in tally if t) + "\n")
+    shown = [t for t in tally if t]
+    console.print(("  " + "  ·  ".join(shown) if shown else "  [green]in sync[/green]") + "\n")
 
     def _section(title: str, style: str, rows: list[str]) -> None:
         if not rows:
@@ -141,8 +168,12 @@ def render_drift(
                 console.print(f"    [red]− {', '.join(cd.removed)}[/red]")
         console.print()
     _section(
-        "Definition differs — advisory", "yellow",
+        "View definition differs", "yellow",
         [f"{k.value:9} {oid}" for k, oid in rep.definitions],
+    )
+    _section(
+        "Procedural definition differs — advisory (unreliable across engines)", "dim",
+        [f"{k.value:9} {oid}" for k, oid in rep.advisory],
     )
     _section(
         "Could not introspect — advisory", "dim",
