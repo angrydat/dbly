@@ -106,7 +106,8 @@ class MssqlAdapter(Adapter):
                 if kind is None:
                     continue
                 h = canonical_hash(src, dialect="tsql") if kind in hashed else None
-                obj = LiveObject(kind, ObjectId(schema, name), h)
+                # OBJECT_DEFINITION is NULL for tables (their DDL is rebuilt from columns).
+                obj = LiveObject(kind, ObjectId(schema, name), h, src)
                 found[obj.key()] = obj
             for schema, name in conn.execute(idx):
                 obj = LiveObject(ObjectKind.INDEX, ObjectId(schema, name))

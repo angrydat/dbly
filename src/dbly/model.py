@@ -94,11 +94,14 @@ class LiveObject:
 
     ``source_hash`` is a canonicalized hash of the definition for procedural/definitional
     objects (views, functions, procedures, triggers) — used for advisory drift detection.
+    ``definition`` is the raw DDL/source as the engine reports it (``None`` for plain tables,
+    whose DDL is reconstructed from columns) — used by ``dbly export``.
     """
 
     kind: ObjectKind
     id: ObjectId
     source_hash: str | None = None
+    definition: str | None = None
 
     def key(self) -> str:
         return f"{self.kind.value}:{self.id.key()}"

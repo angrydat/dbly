@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-24
+
+### Added
+
+- **`dbly export` — reverse direction.** Introspect a live database and emit its DDL as a SQL
+  script, optionally transpiled to another engine with `--dialect` (postgres | oracle |
+  sqlserver | sqlite). Tables and views are converted across dialects (tables rebuilt from the
+  live column set — constraints/indexes are not reconstructed, and a warning says so);
+  procedural objects (function/procedure/trigger/package/type) are emitted **verbatim** in the
+  source dialect. Scope with `--schema`; write to a file with `--out`. dbly's own `dbly_state`
+  ledger is never exported.
+
 ## [0.5.0] — 2026-07-24
 
 ### Added

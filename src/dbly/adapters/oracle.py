@@ -155,6 +155,7 @@ class OracleAdapter(Adapter):
             "('FUNCTION','PROCEDURE','TRIGGER','PACKAGE','PACKAGE BODY','TYPE') "
             "ORDER BY name, type, line"
         )
+        views = text("SELECT view_name, text FROM all_views WHERE owner = USER")
         owner = self.default_schema  # objects are filtered by owner = USER — carry it on the id
         found: dict[str, LiveObject] = {}
         src_text: dict[str, list[str]] = {}
@@ -171,9 +172,16 @@ class OracleAdapter(Adapter):
                     continue
                 key = LiveObject(kind, ObjectId(owner, name)).key()
                 src_text.setdefault(key, []).append(line or "")
+            for name, vtext in conn.execute(views):
+                key = LiveObject(ObjectKind.VIEW, ObjectId(owner, name)).key()
+                if key in found and vtext is not None:
+                    found[key].definition = f"CREATE VIEW {owner}.{name} AS\n{vtext}"
         for key, lines in src_text.items():
             if key in found:
-                found[key].source_hash = canonical_hash("".join(lines), dialect="oracle")
+                body = "".join(lines)
+                found[key].source_hash = canonical_hash(body, dialect="oracle")
+                # all_source starts at "FUNCTION foo…"/"PROCEDURE…"; prefix CREATE OR REPLACE.
+                found[key].definition = "CREATE OR REPLACE " + body.lstrip()
         return list(found.values())
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:

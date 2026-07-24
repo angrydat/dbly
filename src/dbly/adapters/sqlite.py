@@ -67,7 +67,7 @@ class SqliteAdapter(Adapter):
                     continue
                 h = (canonical_hash(sql, dialect="sqlite")
                      if kind in (ObjectKind.VIEW, ObjectKind.TRIGGER) else None)
-                obj = LiveObject(kind, ObjectId(None, name), h)
+                obj = LiveObject(kind, ObjectId(None, name), h, sql)  # sqlite_master.sql = full DDL
                 out[obj.key()] = obj
         return list(out.values())
 

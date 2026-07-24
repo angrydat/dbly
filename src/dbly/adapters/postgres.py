@@ -126,16 +126,19 @@ class PostgresAdapter(Adapter):
                 kind = self._RELKIND.get(relkind)
                 if kind is None:
                     continue
-                h = canonical_hash(src, dialect="postgres") if kind is ObjectKind.VIEW else None
-                obj = LiveObject(kind, ObjectId(schema, name), h)
+                is_view = kind is ObjectKind.VIEW
+                h = canonical_hash(src, dialect="postgres") if is_view else None
+                defn = f"CREATE VIEW {schema}.{name} AS\n{src}" if is_view and src else None
+                obj = LiveObject(kind, ObjectId(schema, name), h, defn)
                 found[obj.key()] = obj
             for schema, name, prokind, src in conn.execute(routines):
                 kind = ObjectKind.PROCEDURE if prokind == "p" else ObjectKind.FUNCTION
-                obj = LiveObject(kind, ObjectId(schema, name), canonical_hash(src, dialect="postgres"))
+                obj = LiveObject(kind, ObjectId(schema, name),
+                                 canonical_hash(src, dialect="postgres"), src)
                 found[obj.key()] = obj
             for schema, name, src in conn.execute(triggers):
                 obj = LiveObject(ObjectKind.TRIGGER, ObjectId(schema, name),
-                                 canonical_hash(src, dialect="postgres"))
+                                 canonical_hash(src, dialect="postgres"), src)
                 found[obj.key()] = obj
         return list(found.values())
 

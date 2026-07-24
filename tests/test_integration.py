@@ -442,3 +442,40 @@ def test_select_schemas_and_paths_scope_discovery(tmp_path: Path):
 
     # no selection → everything under object_root
     assert len(Repo(repo_root, object_root="pgsql/schema").list_files("HEAD")) == 3
+
+
+def test_export_roundtrip_and_cross_dialect(tmp_path: Path):
+    from dbly.export import export_ddl
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text(
+        "CREATE TABLE IF NOT EXISTS kunde (id INTEGER, name TEXT NOT NULL);", encoding="utf-8"
+    )
+    (repo_root / "v_kunde.vw").write_text(
+        "CREATE VIEW v_kunde AS SELECT id, name FROM kunde;", encoding="utf-8"
+    )
+    ref = _commit(repo_root, "v1")
+    db = tmp_path / "exp.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    repo = Repo(repo_root)
+    adapter.apply([s.sql for s in build_plan(repo, adapter, from_ref=None, to_ref=ref,
+                   target="sqlite", dialect="sqlite").steps])
+
+    # same-dialect export: table + view present, table before view
+    res = export_ddl(adapter, source_dialect="sqlite")
+    assert res.object_count == 2
+    assert "CREATE TABLE" in res.ddl and "kunde" in res.ddl
+    assert res.ddl.index("kunde") < res.ddl.index("v_kunde")     # dependency order
+    assert "NOT NULL" in res.ddl                                  # SQLite keeps its stored DDL
+
+    # cross-dialect export to postgres: structural objects transpile, no crash
+    res_pg = export_ddl(adapter, source_dialect="sqlite", target_dialect="postgres")
+    assert res_pg.object_count == 2
+    assert "CREATE TABLE" in res_pg.ddl
+    assert any("transpiling sqlite → postgres" in w for w in res_pg.warnings)
+
+    # dbly_state ledger is never exported
+    adapter.ensure_state_table()
+    assert "dbly_state" not in export_ddl(adapter, source_dialect="sqlite").ddl
+    adapter.dispose()

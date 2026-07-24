@@ -107,7 +107,16 @@ dbly check  --target prod.connection.properties
 
 # greenfield only: run privileged groundwork once under a superuser profile
 dbly init   --init-target super.connection.properties
+
+# reverse: export a live database as a DDL script — optionally in another engine's dialect
+dbly export --target prod.connection.properties
+dbly export --target prod.connection.properties --dialect postgres --out schema.sql
 ```
+
+`export` is the inverse of deploy: tables and views transpile across dialects; procedural
+objects (functions, procedures, triggers) are emitted verbatim in the source dialect. Scope it
+with `--schema`. `plan`, `apply` and `check` likewise take `--schema NAME` / `--path SUBPATH`
+to work on part of the repo (e.g. deploy only `bas/`).
 
 **Typical workflow:** edit your object files → commit → `dbly plan` to review → `dbly apply`.
 

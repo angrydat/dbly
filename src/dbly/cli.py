@@ -16,7 +16,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from dbly import __version__, drift, hooks, initializer, report
+from dbly import __version__, drift, export as export_mod, hooks, initializer, report
 from dbly.adapters import get_adapter
 from dbly.config import ConnectionConfig, load_profile, resolve_target
 from dbly.engine import detect_dialect
@@ -370,6 +370,50 @@ def check(
     )
     if not rep.clean:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def export(
+    target: str = typer.Option(..., "--target", help="connection profile or named target."),
+    dialect: Optional[str] = typer.Option(
+        None, "--dialect",
+        help="transpile to another engine (postgres|oracle|sqlserver|sqlite). "
+             "Default: keep the source engine's dialect.",
+    ),
+    out: Optional[Path] = typer.Option(None, "--out", help="write the DDL script to a file."),
+    schema: Optional[list[str]] = typer.Option(
+        None, "--schema", help="limit to these live schemas; repeatable."
+    ),
+    repo_path: Path = typer.Option(Path("."), "--repo", help="repo root (for dbly.toml targets)."),
+) -> None:
+    """Export a live database as a DDL script — the reverse of deploy, optionally cross-dialect.
+
+    Tables/views transpile across dialects; procedural objects are emitted verbatim.
+    """
+    project = load_project(repo_path)
+    cfg = _resolve_target(project, repo_path, target)
+    source_dialect = sqlglot_dialect(detect_dialect(cfg))
+    target_dialect = sqlglot_dialect(dialect) if dialect else None
+    if dialect and target_dialect is None:
+        err.print(f"[red]unknown --dialect {dialect!r}[/red] (postgres|oracle|sqlserver|sqlite)")
+        raise typer.Exit(code=2)
+
+    adapter = get_adapter(cfg)
+    try:
+        result = export_mod.export_ddl(
+            adapter, source_dialect=source_dialect,
+            target_dialect=target_dialect, schemas=schema or None,
+        )
+    finally:
+        adapter.dispose()
+
+    if out:
+        out.write_text(result.ddl, encoding="utf-8")
+        console.print(f"[green]exported[/green] {result.object_count} object(s) → {out}")
+    else:
+        console.print(result.ddl)
+    for w in result.warnings:
+        err.print(f"[yellow]![/yellow] {w}")
 
 
 def _run_hooks(repo: Repo, phase: str, py_interpreter: str) -> None:
