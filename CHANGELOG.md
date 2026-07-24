@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-07-24
+
+### Fixed
+
+- **Fewer false-positive view drifts.** `check` now strips two artifacts of Postgres'
+  `pg_get_viewdef` before comparing a view: per-column table qualifiers (`foo` → `t.foo`) and
+  redundant parentheses (`st_multi(g)` → `(st_multi(g))`). Both are semantics-preserving, so a
+  genuine change (an added cast, a changed filter, a new column) still shows. On a real schema
+  this cut reported view drift by roughly a third; the remainder are genuine differences or
+  deeper `pg_get_viewdef` reformatting that only a textual diff can adjudicate.
+
 ## [0.8.0] — 2026-07-24
 
 ### Fixed

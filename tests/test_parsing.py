@@ -187,3 +187,15 @@ def test_render_drift_terraform_style(capsys):
     assert "~ modify" in out and "bas.v_x" in out            # view differs
     assert "Drift:" in out and "to create" in out            # terraform-style summary line
     assert "scope: schema=bas" in out                        # scope shown in header
+
+
+def test_canonical_view_query_ignores_pg_rewrite_noise():
+    # pg_get_viewdef qualifies columns and adds redundant parens; neither is a real change.
+    repo = "CREATE VIEW v AS SELECT id, st_multi(geom) AS g FROM t"
+    pg   = "SELECT t.id, (st_multi(t.geom)) AS g FROM t"      # as pg would report it
+    assert parsing.canonical_view_query(repo, dialect="postgres") == \
+           parsing.canonical_view_query(pg, dialect="postgres")
+    # but a genuine change (an added cast) still differs
+    changed = "SELECT t.id, st_multi(t.geom)::geometry AS g FROM t"
+    assert parsing.canonical_view_query(repo, dialect="postgres") != \
+           parsing.canonical_view_query(changed, dialect="postgres")

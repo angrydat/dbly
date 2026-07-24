@@ -177,6 +177,20 @@ def canonical_view_query(sql: str | None, *, dialect: str | None = None) -> str 
         query = parsed.expression if isinstance(parsed, exp.Create) else parsed
         if query is None:
             return None
+        # Postgres' pg_get_viewdef qualifies every column with its table
+        # (``foo`` → ``t.foo``); the repo file usually doesn't. Strip single-part table
+        # qualifiers on both sides so that difference alone doesn't read as drift. A genuine
+        # change (a different cast, an added column, a changed filter) still survives.
+        for col in query.find_all(exp.Column):
+            if col.args.get("table") and not col.args.get("db"):
+                col.set("table", None)
+        # pg_get_viewdef also wraps sub-expressions in redundant parentheses
+        # (``st_multi(geom)`` → ``(st_multi(geom))``). Unwrap a Paren around an already-atomic
+        # node — semantics-preserving, so it doesn't hide a real change.
+        for paren in query.find_all(exp.Paren):
+            inner = paren.this
+            if isinstance(inner, (exp.Column, exp.Literal, exp.Func, exp.Paren, exp.Cast)):
+                paren.replace(inner)
         canon = query.sql(dialect=dialect, normalize=True, pretty=False).lower()
     except Exception:  # noqa: BLE001 — unparseable → text fallback (still consistent both sides)
         canon = " ".join(sql.lower().split())
