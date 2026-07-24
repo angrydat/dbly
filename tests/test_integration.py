@@ -564,3 +564,26 @@ def test_grants_are_apply_only_not_drift(tmp_path: Path):
     assert any(k is ObjectKind.GRANT for k, _ in rep.apply_only)
     assert rep.clean                      # apply-only never makes the check dirty
     adapter.dispose()
+
+
+def test_plan_creates_missing_schema_first(tmp_path: Path, monkeypatch):
+    """On a greenfield target, the schema of a managed object is created before the object."""
+    from dbly.model import ObjectKind
+    repo_root = tmp_path / "db"
+    (repo_root / "download").mkdir(parents=True)
+    _init_repo(repo_root)
+    (repo_root / "download" / "cache.tbl").write_text(
+        "CREATE TABLE download.cache (id INTEGER);", encoding="utf-8")
+    ref = _commit(repo_root, "v1")
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(tmp_path / "s.db")))
+    # simulate a schema-managing engine (like Postgres) on top of the sqlite test backend
+    monkeypatch.setattr(adapter, "ensure_schema_sql", lambda s: f'CREATE SCHEMA IF NOT EXISTS "{s}";')
+    monkeypatch.setattr(adapter, "schema_exists", lambda s: False)
+    monkeypatch.setattr(adapter, "table_exists", lambda schema, name: False)
+    repo = Repo(repo_root)
+    plan = build_plan(repo, adapter, from_ref=None, to_ref=ref, target="sqlite", dialect="sqlite")
+    titles = [s.title for s in plan.steps]
+    assert "create schema download" in titles
+    assert titles.index("create schema download") < next(
+        i for i, t in enumerate(titles) if "cache" in t)          # schema before the table
+    adapter.dispose()

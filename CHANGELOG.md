@@ -7,7 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.11.0] — 2026-07-24
+## [0.12.0] — 2026-07-25
+
+### Fixed
+
+- **Greenfield deploy no longer fails on a missing schema.** `plan`/`apply` now emit
+  `CREATE SCHEMA` for the schemas its managed objects live in, before those objects — so a
+  fresh target where schema `download` doesn't exist no longer dies with
+  `schema "download" does not exist` on the first `CREATE TABLE download.…`. One additive step
+  per absent schema, first in the plan. PostgreSQL (`CREATE SCHEMA IF NOT EXISTS`) and SQL
+  Server (guarded `EXEC('CREATE SCHEMA …')`); Oracle (schemas are users → `init`) and SQLite
+  (no schemas) are unaffected.
+
+### Added
+
+- `ObjectKind.SCHEMA` so the schema step renders as `+ create schema <name>`.
 
 ### Changed
 

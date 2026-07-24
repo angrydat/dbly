@@ -32,6 +32,7 @@ class ObjectKind(str, Enum):
     GRANT = "grant"
     INDEX = "index"
     SEQUENCE = "sequence"
+    SCHEMA = "schema"
     UNKNOWN = "unknown"
 
     @property

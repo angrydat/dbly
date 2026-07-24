@@ -57,6 +57,21 @@ class MssqlAdapter(Adapter):
             for c in cols
         ]
 
+    def schema_exists(self, schema: str) -> bool:
+        with self.engine.connect() as conn:
+            return conn.execute(
+                text("SELECT 1 FROM sys.schemas WHERE name = :s"), {"s": schema}
+            ).first() is not None
+
+    def ensure_schema_sql(self, schema: str) -> str | None:
+        # T-SQL: CREATE SCHEMA must be the first statement in its batch, and pre-2016 has no
+        # IF NOT EXISTS — wrap in a guarded dynamic-SQL EXEC so it self-batches and is idempotent.
+        s = schema.replace("'", "''")
+        return (
+            f"IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '{s}') "
+            f"EXEC('CREATE SCHEMA [{schema}]');"
+        )
+
     def has_object(self, kind: ObjectKind, schema: str | None, name: str) -> bool:
         with self.engine.connect() as conn:
             if kind is ObjectKind.INDEX:

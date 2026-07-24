@@ -69,6 +69,29 @@ def build_plan(
             else:
                 replaceable.append(obj)
 
+    # Ensure the schemas the managed objects live in exist — on a greenfield target
+    # `CREATE TABLE download.x` fails if schema `download` was never created. Emitted first,
+    # once per absent schema. Engines where schemas aren't a dbly concern (Oracle users, SQLite)
+    # return no DDL and are skipped — those belong in `init`.
+    seen_schemas: set[str] = set()
+    for obj in (*sequences, *tables, *indexes, *replaceable):
+        schema = obj.id.schema
+        if not schema or schema.lower() in seen_schemas:
+            continue
+        seen_schemas.add(schema.lower())
+        ddl = adapter.ensure_schema_sql(schema)
+        if ddl and not adapter.schema_exists(schema):
+            plan.steps.append(
+                Step(
+                    title=f"create schema {schema}",
+                    object_id=None,
+                    kind=ObjectKind.SCHEMA,
+                    severity=Severity.ADDITIVE,
+                    sql=ddl,
+                    note="schema of a managed object — created if absent",
+                )
+            )
+
     # Tables touched by a pending migration are migration-managed for this deploy — the
     # migration reshapes them at apply time, so the (plan-time) additive diff must defer.
     migration_tables: set[str] = set()

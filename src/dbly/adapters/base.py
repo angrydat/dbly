@@ -89,6 +89,19 @@ class Adapter(abc.ABC):
         """
         return None
 
+    # --- schemas (namespaces for managed objects) --------------------------------------
+    def schema_exists(self, schema: str) -> bool:
+        """Whether a schema/namespace exists. Default True → never emit a create step for
+        engines that don't manage schemas as dbly objects (see ``ensure_schema_sql``)."""
+        return True
+
+    def ensure_schema_sql(self, schema: str) -> str | None:
+        """Idempotent ``CREATE SCHEMA`` DDL for this engine, or ``None`` when schemas aren't a
+        dbly concern here — Oracle schemas are *users* (privileged ``init`` groundwork), SQLite
+        has no schemas. Postgres/SQL Server override this to create the namespace on deploy.
+        """
+        return None
+
     # --- dialect-specific DDL generation -----------------------------------------------
     @abc.abstractmethod
     def add_column_sql(self, table: ObjectId, col: Column) -> str:

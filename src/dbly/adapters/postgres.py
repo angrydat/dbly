@@ -145,6 +145,16 @@ class PostgresAdapter(Adapter):
                 found[obj.key()] = obj
         return list(found.values())
 
+    def schema_exists(self, schema: str) -> bool:
+        with self.engine.connect() as conn:
+            return conn.execute(
+                text("SELECT 1 FROM information_schema.schemata WHERE schema_name = :s"),
+                {"s": schema},
+            ).first() is not None
+
+    def ensure_schema_sql(self, schema: str) -> str | None:
+        return f'CREATE SCHEMA IF NOT EXISTS "{schema}";'
+
     def canonicalize_view(self, create_view_sql: str) -> str | None:
         # ADR 0001: run the desired view through the engine (throwaway TEMP view) and read back
         # pg_get_viewdef, so it's normalized exactly like the live view (casts elided, names
