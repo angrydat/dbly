@@ -104,6 +104,7 @@ dbly status --target prod.connection.properties
 
 # has the database drifted from the desired state?
 dbly check  --target prod.connection.properties
+dbly check  --target prod.connection.properties --show-diff   # show what changed in each view
 
 # greenfield only: run privileged groundwork once under a superuser profile
 dbly init   --init-target super.connection.properties

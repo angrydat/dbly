@@ -5,12 +5,14 @@ express: ordering, severity, source provenance and warnings.
 """
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
 from rich.console import Console
 
+from dbly import parsing
 from dbly.model import Migration, ObjectId, ObjectKind, Plan, Severity, Step
 
 if TYPE_CHECKING:
@@ -103,6 +105,34 @@ def render_plan(
         )
 
 
+def _print_view_diff(console: Console, key: str, rep: DriftReport, dialect: str | None) -> None:
+    """Print a unified diff (live → repo) of a drifted view/procedural definition."""
+    pair = rep.diffs.get(key)
+    if not pair:
+        return
+    desired_sql, live_def = pair
+    kind = key.split(":", 1)[0]
+    if kind == "view":
+        left = (parsing.normalize_view_sql(live_def, dialect=dialect) or "").splitlines()
+        right = (parsing.normalize_view_sql(desired_sql, dialect=dialect) or "").splitlines()
+    else:  # procedural — no reliable parse; diff whitespace-trimmed lines verbatim
+        left = [ln.rstrip() for ln in live_def.strip().splitlines()]
+        right = [ln.rstrip() for ln in desired_sql.strip().splitlines()]
+    diff = list(difflib.unified_diff(left, right, fromfile="live", tofile="repo", lineterm=""))
+    if not diff:
+        console.print("      [dim](differs only in formatting the parser can't normalize)[/dim]")
+        return
+    for ln in diff:
+        if ln.startswith("+") and not ln.startswith("+++"):
+            console.print(f"      [green]{ln}[/green]")
+        elif ln.startswith("-") and not ln.startswith("---"):
+            console.print(f"      [red]{ln}[/red]")
+        elif ln.startswith("@@"):
+            console.print(f"      [cyan]{ln}[/cyan]")
+        else:
+            console.print(f"      [dim]{ln}[/dim]")
+
+
 def render_drift(
     rep: DriftReport,
     console: Console,
@@ -111,6 +141,8 @@ def render_drift(
     ref: str,
     ref_names: dict[str, str] | None = None,
     scope: str | None = None,
+    show_diff: bool = False,
+    dialect: str | None = None,
 ) -> None:
     """Render drift in the same Terraform-style row layout as ``plan`` (CONCEPT.md §9).
 
@@ -128,23 +160,23 @@ def render_drift(
         console.print("[green]✓ in sync — the database matches the desired state.[/green]")
         return
 
-    # (marker, style, action, kind, target, dim)
-    rows: list[tuple[str, str, str, str, str, bool]] = []
+    # (marker, style, action, kind, target, dim, diff_key)
+    rows: list[tuple[str, str, str, str, str, bool, str | None]] = []
     for k, oid in rep.missing:
-        rows.append(("+", "green", "create", k.value, str(oid), False))
+        rows.append(("+", "green", "create", k.value, str(oid), False, None))
     for k, oid in rep.orphaned:
-        rows.append(("-", "red", "only-in-db", k.value, str(oid), False))
+        rows.append(("-", "red", "only-in-db", k.value, str(oid), False, None))
     for cd in rep.columns:
         for col in cd.added:
-            rows.append(("+", "green", "add", "column", f"{cd.table}.{col}", False))
+            rows.append(("+", "green", "add", "column", f"{cd.table}.{col}", False, None))
         for col in cd.removed:
-            rows.append(("-", "red", "only-in-db", "column", f"{cd.table}.{col}", False))
+            rows.append(("-", "red", "only-in-db", "column", f"{cd.table}.{col}", False, None))
     for k, oid in rep.definitions:
-        rows.append(("~", "yellow", "modify", k.value, str(oid), False))
+        rows.append(("~", "yellow", "modify", k.value, str(oid), False, f"{k.value}:{oid}"))
     for k, oid in rep.advisory:
-        rows.append(("~", "yellow", "modify?", k.value, f"{oid}  (advisory)", True))
+        rows.append(("~", "yellow", "modify?", k.value, f"{oid}  (advisory)", True, f"{k.value}:{oid}"))
     for k, oid in rep.unreadable:
-        rows.append(("?", "yellow", "unreadable", k.value, f"{oid}  (advisory)", True))
+        rows.append(("?", "yellow", "unreadable", k.value, f"{oid}  (advisory)", True, None))
 
     n_add = sum(len(cd.added) for cd in rep.columns)
     n_del = sum(len(cd.removed) for cd in rep.columns)
@@ -158,13 +190,17 @@ def render_drift(
 
     w_action = max((len(r[2]) for r in rows), default=6)
     w_kind = max((len(r[3]) for r in rows), default=8)
-    for marker, style, action, kind, target, dim in rows:
+    for marker, style, action, kind, target, dim, diff_key in rows:
         line = (
             f"  [{style}]{marker}[/{style}] [{style}]{action:<{w_action}}[/{style}]  "
             f"[dim]{kind:<{w_kind}}[/dim]  {target}"
         )
         console.print(f"[dim]{line}[/dim]" if dim else line)
+        if show_diff and diff_key:
+            _print_view_diff(console, diff_key, rep, dialect)
 
+    if show_diff and not rep.diffs:
+        console.print("\n[dim](no diffable definitions — run without --show-diff)[/dim]")
     if not rep.advisory:
         console.print(
             "\n[dim]procedural bodies (function/procedure/trigger) are compared "

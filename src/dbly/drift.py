@@ -41,6 +41,8 @@ class DriftReport:
     definitions: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)  # views (reliable)
     advisory: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)     # procedural (unreliable)
     unreadable: list[tuple[ObjectKind, ObjectId]] = field(default_factory=list)   # reflection failed
+    # key "kind:oid" -> (desired_sql, live_definition), populated when include_diff (for --show-diff)
+    diffs: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     @property
     def clean(self) -> bool:
@@ -64,6 +66,7 @@ def compute_drift(
     dialect: str | None,
     include_orphans: bool = False,
     include_advisory: bool = False,
+    include_diff: bool = False,
 ) -> DriftReport:
     ds = adapter.default_schema
 
@@ -116,6 +119,8 @@ def compute_drift(
             have = parsing.canonical_view_query(live[key].definition, dialect=dialect)
             if want and have and want != have:
                 report.definitions.append((obj.kind, obj.id))
+                if include_diff:
+                    report.diffs[f"{obj.kind.value}:{obj.id}"] = (obj.sql, live[key].definition)
 
     # procedural — advisory only (canonicalization is unreliable across the boundary).
     if include_advisory:
@@ -124,5 +129,7 @@ def compute_drift(
                 want = parsing.canonical_hash(obj.sql, dialect=dialect)
                 if want and want != live[key].source_hash:
                     report.advisory.append((obj.kind, obj.id))
+                    if include_diff and live[key].definition:
+                        report.diffs[f"{obj.kind.value}:{obj.id}"] = (obj.sql, live[key].definition)
 
     return report

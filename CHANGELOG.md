@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-24
+
+### Added
+
+- **`dbly check --show-diff`.** For each changed view (and, with `--advisory`, procedural
+  object), print a unified diff (live → repo) of the normalized definition. This is what tells
+  a genuine change (e.g. a `CAST` the deployed view is missing) apart from `pg_get_viewdef`
+  reformatting that normalization can't fully iron out — the residual after the 0.8.1 fixes.
+
 ## [0.8.1] — 2026-07-24
 
 ### Fixed

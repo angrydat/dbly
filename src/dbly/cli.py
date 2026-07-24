@@ -348,6 +348,11 @@ def check(
         help="also report procedural definition drift (function/procedure/trigger) — "
              "unreliable across engines, off by default.",
     ),
+    show_diff: bool = typer.Option(
+        False, "--show-diff",
+        help="for changed views/definitions, print a unified diff (live → repo) so you can "
+             "tell a real change from parser-normalization noise.",
+    ),
     worktree: bool = typer.Option(
         False, "--worktree", "--dirty",
         help="compare the working tree (uncommitted + untracked) against the DB, not a git ref.",
@@ -369,7 +374,7 @@ def check(
     try:
         rep = drift.compute_drift(
             repo, adapter, to_ref=resolved_to, dialect=dialect,
-            include_orphans=orphans, include_advisory=advisory,
+            include_orphans=orphans, include_advisory=advisory, include_diff=show_diff,
         )
     finally:
         adapter.dispose()
@@ -377,7 +382,7 @@ def check(
     report.render_drift(
         rep, console, target=target, ref=resolved_to,
         ref_names=_decorations(repo_path, Plan(target=target, from_ref=None, to_ref=resolved_to)),
-        scope=_scope_label(schema, path),
+        scope=_scope_label(schema, path), show_diff=show_diff, dialect=dialect,
     )
     if not rep.clean:
         raise typer.Exit(code=1)

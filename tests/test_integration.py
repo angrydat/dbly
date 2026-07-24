@@ -507,3 +507,34 @@ def test_view_drift_only_when_body_actually_differs(tmp_path: Path):
     rep2 = compute_drift(repo, adapter, to_ref=ref2, dialect="sqlite")
     assert [o.name for _, o in rep2.definitions] == ["v_kunde"]
     adapter.dispose()
+
+
+def test_check_show_diff_reveals_real_view_change(tmp_path: Path):
+    from dbly.drift import compute_drift
+    from dbly.report import render_drift
+    from rich.console import Console
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text("CREATE TABLE kunde (id INTEGER, name TEXT);", encoding="utf-8")
+    (repo_root / "v_kunde.vw").write_text(
+        "CREATE VIEW v_kunde AS SELECT id, name FROM kunde;", encoding="utf-8")
+    ref1 = _commit(repo_root, "v1")
+    db = tmp_path / "sd.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    repo = Repo(repo_root)
+    adapter.apply([s.sql for s in build_plan(repo, adapter, from_ref=None, to_ref=ref1,
+                   target="sqlite", dialect="sqlite").steps])
+    # change the view body
+    (repo_root / "v_kunde.vw").write_text(
+        "CREATE VIEW v_kunde AS SELECT id, name FROM kunde WHERE id > 0;", encoding="utf-8")
+    ref2 = _commit(repo_root, "v2")
+
+    rep = compute_drift(repo, adapter, to_ref=ref2, dialect="sqlite", include_diff=True)
+    assert f"view:{list(rep.diffs)[0].split(':',1)[1]}" in rep.diffs  # a diff was captured
+    import io
+    con = Console(file=io.StringIO(), force_terminal=False, width=200)
+    render_drift(rep, con, target="dev", ref=ref2, show_diff=True, dialect="sqlite")
+    out = con.file.getvalue()
+    assert "WHERE" in out and ("+" in out)   # the added filter shows in the diff
+    adapter.dispose()

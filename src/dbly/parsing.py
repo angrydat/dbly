@@ -170,6 +170,24 @@ def canonical_view_query(sql: str | None, *, dialect: str | None = None) -> str 
     the ``SELECT``. Hashing the raw text on each side made *every* view look drifted. Here both
     sides are reduced to just the query and rendered the same way, so an identical view matches.
     """
+    s = normalize_view_sql(sql, dialect=dialect, pretty=False)
+    if s is None:
+        return None
+    return hashlib.sha256(s.lower().encode("utf-8")).hexdigest()[:16]
+
+
+def normalize_view_sql(sql: str | None, *, dialect: str | None = None, pretty: bool = True) -> str | None:
+    """The view's SELECT body, normalized so ``pg_get_viewdef`` rewrite noise falls away.
+
+    Reduces both sides of a comparison to the same shape:
+
+    * unwrap the ``CREATE VIEW`` — compare only the query;
+    * strip per-column table qualifiers (``t.foo`` → ``foo``) that Postgres always adds;
+    * drop redundant parentheses around already-atomic nodes (``(st_multi(g))`` → ``st_multi(g)``).
+
+    Semantics-preserving — a genuine change (a cast, a new column, a changed filter) survives.
+    Used both for the drift hash (``pretty=False``) and the ``--show-diff`` display (pretty).
+    """
     if not sql or not sql.strip():
         return None
     try:
@@ -177,24 +195,16 @@ def canonical_view_query(sql: str | None, *, dialect: str | None = None) -> str 
         query = parsed.expression if isinstance(parsed, exp.Create) else parsed
         if query is None:
             return None
-        # Postgres' pg_get_viewdef qualifies every column with its table
-        # (``foo`` → ``t.foo``); the repo file usually doesn't. Strip single-part table
-        # qualifiers on both sides so that difference alone doesn't read as drift. A genuine
-        # change (a different cast, an added column, a changed filter) still survives.
         for col in query.find_all(exp.Column):
             if col.args.get("table") and not col.args.get("db"):
                 col.set("table", None)
-        # pg_get_viewdef also wraps sub-expressions in redundant parentheses
-        # (``st_multi(geom)`` → ``(st_multi(geom))``). Unwrap a Paren around an already-atomic
-        # node — semantics-preserving, so it doesn't hide a real change.
         for paren in query.find_all(exp.Paren):
             inner = paren.this
             if isinstance(inner, (exp.Column, exp.Literal, exp.Func, exp.Paren, exp.Cast)):
                 paren.replace(inner)
-        canon = query.sql(dialect=dialect, normalize=True, pretty=False).lower()
-    except Exception:  # noqa: BLE001 — unparseable → text fallback (still consistent both sides)
-        canon = " ".join(sql.lower().split())
-    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+        return query.sql(dialect=dialect, normalize=True, pretty=pretty)
+    except Exception:  # noqa: BLE001 — unparseable → text fallback (consistent on both sides)
+        return " ".join(sql.split())
 
 
 def desired_columns(sql: str, *, dialect: str | None = None) -> list[Column]:
