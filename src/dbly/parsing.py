@@ -170,41 +170,47 @@ def canonical_view_query(sql: str | None, *, dialect: str | None = None) -> str 
     the ``SELECT``. Hashing the raw text on each side made *every* view look drifted. Here both
     sides are reduced to just the query and rendered the same way, so an identical view matches.
     """
-    s = normalize_view_sql(sql, dialect=dialect, pretty=False)
-    if s is None:
-        return None
-    return hashlib.sha256(s.lower().encode("utf-8")).hexdigest()[:16]
+    expr = _normalized_view_expr(sql, dialect=dialect)
+    if expr is None:  # unparseable → consistent text fallback
+        return hashlib.sha256(" ".join(sql.lower().split()).encode("utf-8")).hexdigest()[:16]
+    # Hash the *structure* (repr), not rendered SQL: precedence lives in the tree, so this
+    # distinguishes ``(a OR b) AND c`` from ``a OR b AND c`` while ignoring redundant parens —
+    # and sidesteps sqlglot's renderer, which doesn't re-insert precedence parens.
+    return hashlib.sha256(repr(expr).lower().encode("utf-8")).hexdigest()[:16]
 
 
-def normalize_view_sql(sql: str | None, *, dialect: str | None = None, pretty: bool = True) -> str | None:
-    """The view's SELECT body, normalized so ``pg_get_viewdef`` rewrite noise falls away.
+def _normalized_view_expr(sql: str | None, *, dialect: str | None = None) -> exp.Expression | None:
+    """Parse a view/SELECT and reduce it to a canonical structural form (shared, ADR 0001).
 
-    Reduces both sides of a comparison to the same shape:
-
-    * unwrap the ``CREATE VIEW`` — compare only the query;
+    * unwrap the ``CREATE VIEW`` — keep only the query;
     * strip per-column table qualifiers (``t.foo`` → ``foo``) that Postgres always adds;
-    * drop redundant parentheses around already-atomic nodes (``(st_multi(g))`` → ``st_multi(g)``).
-
-    Semantics-preserving — a genuine change (a cast, a new column, a changed filter) survives.
-    Used both for the drift hash (``pretty=False``) and the ``--show-diff`` display (pretty).
+    * remove **all** parentheses — operator precedence is encoded in the tree structure, so
+      redundant parens (which ``pg_get_viewdef`` keeps from the original source text) vanish
+      while a real precedence difference remains a different tree.
     """
     if not sql or not sql.strip():
         return None
     try:
         parsed = sqlglot.parse_one(sql, read=dialect)
-        query = parsed.expression if isinstance(parsed, exp.Create) else parsed
-        if query is None:
-            return None
-        for col in query.find_all(exp.Column):
-            if col.args.get("table") and not col.args.get("db"):
-                col.set("table", None)
-        for paren in query.find_all(exp.Paren):
-            inner = paren.this
-            if isinstance(inner, (exp.Column, exp.Literal, exp.Func, exp.Paren, exp.Cast)):
-                paren.replace(inner)
-        return query.sql(dialect=dialect, normalize=True, pretty=pretty)
-    except Exception:  # noqa: BLE001 — unparseable → text fallback (consistent on both sides)
-        return " ".join(sql.split())
+    except Exception:  # noqa: BLE001
+        return None
+    query = parsed.expression if isinstance(parsed, exp.Create) else parsed
+    if query is None:
+        return None
+    for col in query.find_all(exp.Column):
+        if col.args.get("table") and not col.args.get("db"):
+            col.set("table", None)
+    for paren in list(query.find_all(exp.Paren)):
+        paren.replace(paren.this)
+    return query
+
+
+def normalize_view_sql(sql: str | None, *, dialect: str | None = None, pretty: bool = True) -> str | None:
+    """Human-readable normalized view SQL for the ``--show-diff`` display (not for hashing)."""
+    expr = _normalized_view_expr(sql, dialect=dialect)
+    if expr is None:
+        return " ".join(sql.split()) if sql else None
+    return expr.sql(dialect=dialect, normalize=True, pretty=pretty)
 
 
 def desired_columns(sql: str, *, dialect: str | None = None) -> list[Column]:

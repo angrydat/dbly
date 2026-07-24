@@ -77,6 +77,18 @@ class Adapter(abc.ABC):
         """Read-only live inventory of user objects across kinds, for drift detection
         (``dbly check``). Procedural/definitional objects carry a canonical source hash."""
 
+    def canonicalize_view(self, create_view_sql: str) -> str | None:
+        """Return the engine's canonical form of a view from its ``CREATE VIEW`` SQL (ADR 0001).
+
+        The engine stores a *normalized* view (eliding no-op casts, qualifying names,
+        reformatting), so the repo's source text never equals the stored form. To compare
+        fairly we run the desired SQL through the engine too — create a throwaway probe view,
+        read its canonical definition back, discard it — so both sides are normalized the same
+        way. Returns ``None`` when the engine has no round-trip support or the probe can't be
+        created (e.g. insufficient privilege); the caller then falls back to a raw comparison.
+        """
+        return None
+
     # --- dialect-specific DDL generation -----------------------------------------------
     @abc.abstractmethod
     def add_column_sql(self, table: ObjectId, col: Column) -> str:

@@ -199,3 +199,13 @@ def test_canonical_view_query_ignores_pg_rewrite_noise():
     changed = "SELECT t.id, st_multi(t.geom)::geometry AS g FROM t"
     assert parsing.canonical_view_query(repo, dialect="postgres") != \
            parsing.canonical_view_query(changed, dialect="postgres")
+
+
+def test_canonical_view_query_is_structural_not_textual():
+    cvq = parsing.canonical_view_query
+    # redundant parens anywhere (predicate, projection, NULLIF arg) → same structure
+    assert cvq("SELECT a/b AS r FROM t WHERE (x IS DISTINCT FROM 5)", dialect="postgres") == \
+           cvq("SELECT (a/b) AS r FROM t WHERE x IS DISTINCT FROM 5", dialect="postgres")
+    # precedence is encoded in the tree, so parens that matter are NOT collapsed away
+    assert cvq("SELECT 1 AS x FROM t WHERE (a OR b) AND c", dialect="postgres") != \
+           cvq("SELECT 1 AS x FROM t WHERE a OR b AND c", dialect="postgres")

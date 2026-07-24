@@ -115,12 +115,15 @@ def compute_drift(
     # "every view drifts" false positive from hashing CREATE-VIEW vs a bare SELECT).
     for key, obj in desired.items():
         if obj.kind is ObjectKind.VIEW and key in live and live[key].definition:
-            want = parsing.canonical_view_query(obj.sql, dialect=dialect)
+            # ADR 0001: normalize the desired view through the engine so both sides are the
+            # engine's canonical form; fall back to the raw repo SQL if the probe isn't possible.
+            desired_def = adapter.canonicalize_view(obj.sql) or obj.sql
+            want = parsing.canonical_view_query(desired_def, dialect=dialect)
             have = parsing.canonical_view_query(live[key].definition, dialect=dialect)
             if want and have and want != have:
                 report.definitions.append((obj.kind, obj.id))
                 if include_diff:
-                    report.diffs[f"{obj.kind.value}:{obj.id}"] = (obj.sql, live[key].definition)
+                    report.diffs[f"{obj.kind.value}:{obj.id}"] = (desired_def, live[key].definition)
 
     # procedural — advisory only (canonicalization is unreliable across the boundary).
     if include_advisory:

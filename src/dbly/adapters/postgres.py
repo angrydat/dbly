@@ -6,7 +6,9 @@ against which the trickier Oracle/SQL-Server semantics are later measured.
 """
 from __future__ import annotations
 
+import sqlglot
 from sqlalchemy import inspect, text
+from sqlglot import exp
 
 from dbly.adapters.base import Adapter, Column, render_column_type
 from dbly.model import LiveObject, ObjectId, ObjectKind
@@ -142,6 +144,31 @@ class PostgresAdapter(Adapter):
                                  canonical_hash(src, dialect="postgres"), src)
                 found[obj.key()] = obj
         return list(found.values())
+
+    def canonicalize_view(self, create_view_sql: str) -> str | None:
+        # ADR 0001: run the desired view through the engine (throwaway TEMP view) and read back
+        # pg_get_viewdef, so it's normalized exactly like the live view (casts elided, names
+        # qualified) — then the two canonical forms compare cleanly. Rolled back; no residue.
+        try:
+            parsed = sqlglot.parse_one(create_view_sql, read="postgres")
+            query = parsed.expression if isinstance(parsed, exp.Create) else parsed
+            if query is None:
+                return None
+            select_sql = query.sql(dialect="postgres")
+        except Exception:  # noqa: BLE001 — unparseable desired SQL → caller falls back
+            return None
+        try:
+            with self.engine.connect() as conn:
+                trans = conn.begin()
+                try:
+                    conn.exec_driver_sql("CREATE TEMP VIEW __dbly_probe AS " + select_sql)
+                    return conn.exec_driver_sql(
+                        "SELECT pg_get_viewdef('__dbly_probe'::regclass, true)"
+                    ).scalar()
+                finally:
+                    trans.rollback()  # discard the probe (temp + rolled back → no side effect)
+        except Exception:  # noqa: BLE001 — no privilege / unresolvable tables → fall back
+            return None
 
     def add_column_sql(self, table: ObjectId, col: Column) -> str:
         parts = [f"ALTER TABLE {table} ADD COLUMN {col.name} {col.type}"]

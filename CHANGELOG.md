@@ -7,7 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.9.0] — 2026-07-24
+## [0.10.0] — 2026-07-24
+
+### Changed
+
+- **Views are compared by canonical structure, not text (ADR 0001).** A database stores a view
+  as a *normalized rewrite*, not the source text (Postgres elides no-op casts, qualifies names,
+  re-parenthesizes), so text/hash comparison flagged correctly-deployed views as drifted. View
+  drift now works in two layers: (1) the desired view is run through the engine — a throwaway,
+  rolled-back `TEMP VIEW` — so both sides carry the *same* engine normalization; (2) the two
+  are compared as **parse trees** with all redundant parentheses removed and column qualifiers
+  stripped (operator precedence is preserved because it lives in the tree shape). On a real
+  schema this took reported view drift from 41 to 1. See `docs/adr/0001-*.md`, incl. known
+  limitations (parenthesized `FROM` joins may still show a cosmetic diff — use `--show-diff`).
+  Requires `CREATE` privilege for the deploy connection (expected for a deploy tool); without
+  it, view comparison falls back to the raw definition.
+
+### Note
+
+- Engine round-trip is implemented for **PostgreSQL**. Oracle, SQL Server and SQLite still use
+  the direct definition comparison and will adopt the round-trip in a follow-up (ADR 0001).
 
 ### Added
 
