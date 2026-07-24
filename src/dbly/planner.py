@@ -178,7 +178,7 @@ def _plan_table(adapter: Adapter, plan: Plan, obj: ParsedObject, dialect: str | 
     # auto-applied (a narrowing/incompatible change can truncate or fail) — flagged for review.
     for col in desired:
         actual_col = actual_by_key.get(col.key())
-        if actual_col is None or not parsing.types_differ(col.type, actual_col.type):
+        if actual_col is None or not parsing.types_differ(col.type, actual_col.type, dialect=dialect):
             continue
         plan.steps.append(
             Step(

@@ -19,7 +19,22 @@ from dbly.config import ConnectionConfig
 from dbly.engine import make_engine
 from dbly.model import Column, LiveObject, ObjectId, ObjectKind
 
-__all__ = ["Adapter", "Column"]
+__all__ = ["Adapter", "Column", "render_column_type"]
+
+
+def render_column_type(sqla_type: object, dialect: object) -> str:
+    """Render a reflected SQLAlchemy column type faithfully for comparison.
+
+    ``str(type)`` is lossy — it drops a TIMESTAMP's timezone flag and an ARRAY's element type,
+    and yields ``NULL`` for types SQLAlchemy doesn't model (e.g. PostGIS ``geometry``).
+    Compiling against the engine dialect preserves those (``TIMESTAMP WITH TIME ZONE``,
+    ``TEXT[]``); anything that can't be compiled falls back to ``str`` (and unknown types then
+    surface as ``NULL``, which the type-diff treats as "don't know" and skips).
+    """
+    try:
+        return sqla_type.compile(dialect=dialect)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — NullType / uncompilable → lossy str fallback
+        return str(sqla_type)
 
 
 class Adapter(abc.ABC):

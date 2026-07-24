@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy import inspect, text
 
-from dbly.adapters.base import Adapter, Column
+from dbly.adapters.base import Adapter, Column, render_column_type
 from dbly.model import LiveObject, ObjectId, ObjectKind
 from dbly.parsing import canonical_hash
 
@@ -69,10 +69,11 @@ class PostgresAdapter(Adapter):
         insp = inspect(self.engine)
         rs, rn = self._resolve(schema, name) or (schema, name)
         cols = insp.get_columns(rn, schema=rs)
+        dialect = self.engine.dialect
         return [
             Column(
                 name=c["name"],
-                type=str(c["type"]),
+                type=render_column_type(c["type"], dialect),
                 nullable=bool(c["nullable"]),
                 default=None if c.get("default") is None else str(c["default"]),
             )

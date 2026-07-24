@@ -126,15 +126,22 @@ def test_plan_yaml_roundtrip():
     assert back.warnings == ["something"]
 
 
-def test_canonical_type_normalizes_numeric_scale_and_collation():
-    # omitted scale ≡ scale 0 (Oracle NUMBER(p) == NUMBER(p,0)); case/space-insensitive
-    assert parsing.canonical_type("NUMBER(10)") == parsing.canonical_type("number(10, 0)")
-    # a genuine precision change is preserved (bug: NUMBER → NUMBER(10) was missed)
-    assert parsing.types_differ("NUMBER", "NUMBER(10)")
-    assert parsing.types_differ("NUMBER(10)", "NUMBER(12)")
+def test_types_differ_structural_via_sqlglot():
+    # synonyms and lossy-introspection artifacts must NOT count as drift
+    assert not parsing.types_differ("INTEGER", "INT", dialect="postgres")
+    assert not parsing.types_differ("NUMERIC", "DECIMAL", dialect="postgres")
+    assert not parsing.types_differ("NUMERIC(12,2)", "DECIMAL(12, 2)", dialect="postgres")
+    assert not parsing.types_differ("timestamptz", "TIMESTAMP WITH TIME ZONE", dialect="postgres")
+    assert not parsing.types_differ("text[]", "TEXT[]", dialect="postgres")
+    assert not parsing.types_differ("VARCHAR2(200)", "varchar2(200)", dialect="oracle")
     # SQL Server appends a COLLATE clause on reflected string types — not a real change
-    assert not parsing.types_differ("NVARCHAR(100)", 'NVARCHAR(100) COLLATE "SQL_Latin1_CI_AS"')
-    assert not parsing.types_differ("VARCHAR2(200)", "varchar2(200)")
+    assert not parsing.types_differ("NVARCHAR(100)", 'NVARCHAR(100) COLLATE "X"', dialect="tsql")
+    # genuine precision changes ARE drift
+    assert parsing.types_differ("NUMBER", "NUMBER(10)", dialect="oracle")
+    assert parsing.types_differ("VARCHAR(50)", "VARCHAR(100)", dialect="postgres")
+    # unknown / unmodelled types (PostGIS geometry → NULL) are skipped, never reported
+    assert not parsing.types_differ("GEOMETRY", "NULL", dialect="postgres")
+    assert parsing.canonical_type("NULL", dialect="postgres") is None
 
 
 def test_render_plan_shows_step_note(capsys):
@@ -162,19 +169,21 @@ def test_decorate_ref_git_style():
     assert report._decorate_ref("deadbeef", None) == "deadbeef"  # no names → raw sha
 
 
-def test_render_drift_shows_direction_and_counts(capsys):
+def test_render_drift_terraform_style(capsys):
     from rich.console import Console
     from dbly.drift import ColumnDrift, DriftReport
+    from dbly.model import ObjectId
     rep = DriftReport()
-    rep.missing.append((ObjectKind.TABLE, __import__("dbly.model", fromlist=["ObjectId"]).ObjectId("bas", "neu")))
-    rep.columns.append(ColumnDrift(
-        __import__("dbly.model", fromlist=["ObjectId"]).ObjectId("bas", "kunde"),
-        added=["email"], removed=["legacy"]))
+    rep.missing.append((ObjectKind.TABLE, ObjectId("bas", "neu")))
+    rep.columns.append(ColumnDrift(ObjectId("bas", "kunde"), added=["email"], removed=["legacy"]))
+    rep.definitions.append((ObjectKind.VIEW, ObjectId("bas", "v_x")))
     report.render_drift(rep, Console(force_terminal=False, width=200),
                         target="dev", ref="abc1234", scope="schema=bas")
     out = capsys.readouterr().out
-    assert "Only in the repo" in out          # explicit direction, not just "missing"
-    assert "Column drift" in out
-    assert "+ email" in out and "− legacy" in out   # + = add to DB, − = only in DB
-    assert "1 to create" in out               # summary tally
-    assert "scope: schema=bas" in out          # scope shown in header
+    # same row language as plan: marker + action + kind + target
+    assert "+ create" in out and "bas.neu" in out            # missing → create
+    assert "+ add" in out and "bas.kunde.email" in out       # column added (repo, missing in DB)
+    assert "- only-in-db" in out and "bas.kunde.legacy" in out  # column only in DB
+    assert "~ modify" in out and "bas.v_x" in out            # view differs
+    assert "Drift:" in out and "to create" in out            # terraform-style summary line
+    assert "scope: schema=bas" in out                        # scope shown in header

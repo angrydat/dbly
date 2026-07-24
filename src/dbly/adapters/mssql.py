@@ -18,7 +18,7 @@ import re
 
 from sqlalchemy import inspect, text
 
-from dbly.adapters.base import Adapter, Column
+from dbly.adapters.base import Adapter, Column, render_column_type
 from dbly.model import LiveObject, ObjectId, ObjectKind
 from dbly.parsing import canonical_hash
 
@@ -46,10 +46,11 @@ class MssqlAdapter(Adapter):
 
     def get_columns(self, schema: str | None, name: str) -> list[Column]:
         cols = inspect(self.engine).get_columns(name, schema=schema)
+        dialect = self.engine.dialect
         return [
             Column(
                 name=c["name"],
-                type=str(c["type"]),
+                type=render_column_type(c["type"], dialect),
                 nullable=bool(c["nullable"]),
                 default=None if c.get("default") is None else str(c["default"]),
             )

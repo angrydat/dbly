@@ -7,6 +7,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-07-24
+
+### Fixed
+
+- **Column type comparison no longer cries wolf.** `plan` flagged dozens of non-changes
+  (`INTEGER → INT`, `NUMERIC → DECIMAL`, `TIMESTAMP → TIMESTAMPTZ`, `ARRAY → TEXT[]`,
+  `geometry → NULL`) because it compared type *strings* across the sqlglot↔SQLAlchemy
+  boundary. Types are now parsed through sqlglot's type parser and compared structurally, so
+  synonyms collapse; and reflected DB types are rendered faithfully (a TIMESTAMP keeps its
+  timezone, an ARRAY its element type) instead of via lossy `str()`. When either side is an
+  unknown/unmodelled type (e.g. PostGIS `geometry`), no change is reported rather than a false
+  positive. A genuine precision change (`NUMBER → NUMBER(10)`) is still caught.
+
+### Changed
+
+- **`check` output now matches `plan`.** Drift is rendered in the same Terraform-style rows —
+  `+ create`, `+ add column`, `- only-in-db`, `~ modify` — with a `Drift: N to create, N to
+  change, N only in DB.` summary, so the two commands read alike.
+
 ## [0.7.0] — 2026-07-24
 
 ### Fixed

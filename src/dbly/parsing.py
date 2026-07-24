@@ -215,39 +215,46 @@ def desired_columns(sql: str, *, dialect: str | None = None) -> list[Column]:
     return columns
 
 
-_NUMERIC_TYPES = {"NUMBER", "NUMERIC", "DECIMAL", "DEC"}
+# sqlglot DataType families we treat as "unknown" — comparison can't be trusted, so skip.
+_UNKNOWN_TYPES = {exp.DataType.Type.NULL, exp.DataType.Type.UNKNOWN, exp.DataType.Type.USERDEFINED}
 
 
-def canonical_type(type_str: str) -> str:
-    """Normalize a column type for cross-boundary comparison (desired vs. introspected).
+def canonical_type(type_str: str, *, dialect: str | None = None) -> str | None:
+    """Canonicalize a column type through sqlglot's type parser (structural, not text).
 
-    The desired side is rendered by sqlglot (e.g. ``NUMBER(10)``); the actual side comes from
-    SQLAlchemy introspection (e.g. ``NUMBER(10, 0)``). Whitespace/case and an *omitted numeric
-    scale* are normalized so semantically-equal types compare equal — while a genuine
-    precision/scale change (``NUMBER`` → ``NUMBER(10)``) is preserved.
+    Both sides of a comparison arrive spelled differently — the desired side rendered by
+    sqlglot, the actual side by SQLAlchemy introspection. Parsing each into a ``DataType`` and
+    re-rendering collapses synonyms that mean the same thing (``INTEGER``≡``INT``,
+    ``NUMERIC``≡``DECIMAL``, ``TIMESTAMP``≡``timestamp without time zone``) while preserving a
+    genuine precision/scale change (``NUMBER``→``NUMBER(10)``).
 
-    Honest scope: this is a string-level normalizer, not a type system. Exotic spellings that
-    differ across the sqlglot↔SQLAlchemy boundary may still compare unequal; a resulting
-    MODIFY step is flagged destructive (never auto-applied) and carries a warning, so a false
-    positive surfaces as a reviewable note rather than silent data loss.
+    Returns ``None`` when the type can't be parsed or is an unknown/user-defined type (e.g. a
+    PostGIS ``geometry`` that SQLAlchemy reflects as ``NULL``) — the caller then declines to
+    report a change rather than guessing.
     """
-    s = " ".join(type_str.strip().upper().split())
-    # Drop introspection decorations that carry no shape info (e.g. SQL Server appends
-    # `COLLATE "SQL_Latin1_General_CP1_CI_AS"` to reflected string types).
-    s = re.split(r"\s+COLLATE\s+", s, maxsplit=1)[0].strip()
-    m = re.match(r"^([A-Z0-9_ ]+?)\s*\(([^)]*)\)\s*$", s)
-    if not m:
-        return s.replace(" ", "")
-    base = m.group(1).strip().replace(" ", "")
-    params = [p.strip() for p in m.group(2).split(",") if p.strip()]
-    if base in _NUMERIC_TYPES and len(params) == 1:
-        params.append("0")  # NUMBER(p) ≡ NUMBER(p,0) — scale defaults to 0
-    return f"{base}({','.join(params)})"
+    s = re.split(r"\s+COLLATE\s+", type_str.strip(), maxsplit=1)[0].strip()  # drop collation noise
+    if not s:
+        return None
+    try:
+        dt = exp.DataType.build(s, dialect=dialect)
+    except Exception:  # noqa: BLE001 — unparseable spelling → "don't know"
+        return None
+    if dt.this in _UNKNOWN_TYPES:
+        return None
+    return dt.sql(dialect=dialect).upper()
 
 
-def types_differ(desired: str, actual: str) -> bool:
-    """Whether a declared (desired) column type differs from the live (actual) one."""
-    return canonical_type(desired) != canonical_type(actual)
+def types_differ(desired: str, actual: str, *, dialect: str | None = None) -> bool:
+    """Whether a declared (desired) column type genuinely differs from the live (actual) one.
+
+    Conservative: if either side can't be canonicalized (unknown/user-defined/unparseable),
+    returns ``False`` — dbly would rather miss an exotic type change than cry wolf on every
+    deploy (which lossy introspection of arrays/geometry/tz types otherwise caused)."""
+    cd = canonical_type(desired, dialect=dialect)
+    ca = canonical_type(actual, dialect=dialect)
+    if cd is None or ca is None:
+        return False
+    return cd != ca
 
 
 def topological_order(objects: list[ParsedObject]) -> list[ParsedObject]:

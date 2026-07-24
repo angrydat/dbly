@@ -112,73 +112,64 @@ def render_drift(
     ref_names: dict[str, str] | None = None,
     scope: str | None = None,
 ) -> None:
-    """Render a drift report with explicit direction, grouping and counts (CONCEPT.md §9).
+    """Render drift in the same Terraform-style row layout as ``plan`` (CONCEPT.md §9).
 
-    The old output was one flat line per item and never made clear *which way* a difference
-    ran. Here each group states the direction in its heading, and column drift uses ``+`` (in
-    the repo, missing from the DB) vs. ``−`` (in the DB, not in the repo).
+    Same visual language as ``plan``: a marker + action + kind + target per line, so ``check``
+    and ``plan`` read alike. Markers: ``+`` would be created on apply, ``-`` exists only in the
+    DB, ``~`` differs (view/column), ``?`` couldn't be introspected. Column drift is expanded
+    to one row per column (``+`` in repo / missing from DB, ``-`` in DB / not in repo).
     """
     head = f"[bold]Drift[/bold] for [cyan]{target}[/cyan]  {_decorate_ref(ref, ref_names)}"
     if scope:
         head += f"  [dim](scope: {scope})[/dim]"
     console.print(head)
 
-    if rep.clean and not rep.unreadable:
-        console.print("[green]✓ no drift — the database matches the desired state.[/green]")
+    if rep.clean and not rep.unreadable and not rep.advisory:
+        console.print("[green]✓ in sync — the database matches the desired state.[/green]")
         return
+
+    # (marker, style, action, kind, target, dim)
+    rows: list[tuple[str, str, str, str, str, bool]] = []
+    for k, oid in rep.missing:
+        rows.append(("+", "green", "create", k.value, str(oid), False))
+    for k, oid in rep.orphaned:
+        rows.append(("-", "red", "only-in-db", k.value, str(oid), False))
+    for cd in rep.columns:
+        for col in cd.added:
+            rows.append(("+", "green", "add", "column", f"{cd.table}.{col}", False))
+        for col in cd.removed:
+            rows.append(("-", "red", "only-in-db", "column", f"{cd.table}.{col}", False))
+    for k, oid in rep.definitions:
+        rows.append(("~", "yellow", "modify", k.value, str(oid), False))
+    for k, oid in rep.advisory:
+        rows.append(("~", "yellow", "modify?", k.value, f"{oid}  (advisory)", True))
+    for k, oid in rep.unreadable:
+        rows.append(("?", "yellow", "unreadable", k.value, f"{oid}  (advisory)", True))
 
     n_add = sum(len(cd.added) for cd in rep.columns)
     n_del = sum(len(cd.removed) for cd in rep.columns)
-    tally = [
-        f"[yellow]{len(rep.missing)}[/yellow] to create" if rep.missing else None,
-        f"[red]{len(rep.orphaned)}[/red] orphaned" if rep.orphaned else None,
-        f"[yellow]{len(rep.columns)}[/yellow] tables with column drift"
-        f" ([green]+{n_add}[/green]/[red]−{n_del}[/red])" if rep.columns else None,
-        f"[yellow]{len(rep.definitions)}[/yellow] changed views" if rep.definitions else None,
-        f"[dim]{len(rep.advisory)} advisory[/dim]" if rep.advisory else None,
-        f"[dim]{len(rep.unreadable)} unreadable[/dim]" if rep.unreadable else None,
-    ]
-    shown = [t for t in tally if t]
-    console.print(("  " + "  ·  ".join(shown) if shown else "  [green]in sync[/green]") + "\n")
+    n_create = len(rep.missing)
+    n_change = len(rep.definitions) + n_add
+    n_destroy = len(rep.orphaned) + n_del
+    console.print(
+        f"\n[bold]Drift:[/bold] {n_create} to create, {n_change} to change, "
+        f"{n_destroy} only in DB.\n"
+    )
 
-    def _section(title: str, style: str, rows: list[str]) -> None:
-        if not rows:
-            return
-        console.print(f"[{style} bold]{title}[/{style} bold]  [dim]({len(rows)})[/dim]")
-        for r in rows:
-            console.print(f"  {r}")
-        console.print()
+    w_action = max((len(r[2]) for r in rows), default=6)
+    w_kind = max((len(r[3]) for r in rows), default=8)
+    for marker, style, action, kind, target, dim in rows:
+        line = (
+            f"  [{style}]{marker}[/{style}] [{style}]{action:<{w_action}}[/{style}]  "
+            f"[dim]{kind:<{w_kind}}[/dim]  {target}"
+        )
+        console.print(f"[dim]{line}[/dim]" if dim else line)
 
-    _section(
-        "Only in the repo — will be created on apply", "yellow",
-        [f"{k.value:9} {oid}" for k, oid in rep.missing],
-    )
-    _section(
-        "Only in the database — not in the repo", "red",
-        [f"{k.value:9} {oid}" for k, oid in rep.orphaned],
-    )
-    if rep.columns:
-        console.print(f"[yellow bold]Column drift[/yellow bold]  [dim]({len(rep.columns)})[/dim]")
-        console.print("  [dim](+ in repo, missing from DB · − in DB, not in repo)[/dim]")
-        for cd in rep.columns:
-            console.print(f"  {cd.table}")
-            if cd.added:
-                console.print(f"    [green]+ {', '.join(cd.added)}[/green]")
-            if cd.removed:
-                console.print(f"    [red]− {', '.join(cd.removed)}[/red]")
-        console.print()
-    _section(
-        "View definition differs", "yellow",
-        [f"{k.value:9} {oid}" for k, oid in rep.definitions],
-    )
-    _section(
-        "Procedural definition differs — advisory (unreliable across engines)", "dim",
-        [f"{k.value:9} {oid}" for k, oid in rep.advisory],
-    )
-    _section(
-        "Could not introspect — advisory", "dim",
-        [f"{k.value:9} {oid}" for k, oid in rep.unreadable],
-    )
+    if not rep.advisory:
+        console.print(
+            "\n[dim]procedural bodies (function/procedure/trigger) are compared "
+            "only with --advisory[/dim]"
+        )
 
 
 def plan_to_sql(plan: Plan, *, state_ddl: str | None = None, record_sql: str | None = None) -> str:
