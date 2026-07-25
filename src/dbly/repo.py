@@ -101,6 +101,27 @@ class Repo:
             and not self.is_ignored(rel)
         )
 
+    def _is_object_unscoped(self, rel: Path) -> bool:
+        """Like ``_is_object`` but ignoring the ``--schema``/``--path`` selection — the full
+        deployable object graph, used to resolve a scoped deploy's dependency closure."""
+        return (
+            self._is_sql(rel)
+            and not self._is_migration(rel)
+            and self._under_object_root(rel)
+            and not self.is_ignored(rel)
+        )
+
+    def all_object_files(self, ref: str) -> list[Path]:
+        """Every deployable object file at ``ref`` regardless of the subset selection."""
+        if ref == WORKTREE:
+            return [p for p in self._worktree_paths() if self._is_object_unscoped(p)]
+        raw = self._git("ls-tree", "-r", "--name-only", "-z", ref)
+        return [Path(n) for n in filter(None, raw.split("\0")) if self._is_object_unscoped(Path(n))]
+
+    @property
+    def has_selection(self) -> bool:
+        return self.select_schemas is not None or self.select_paths is not None
+
     def _untracked_files(self) -> list[Path]:
         """New files in the working tree not yet added to git (``git status`` "??")."""
         raw = self._git("ls-files", "--others", "--exclude-standard", "-z")

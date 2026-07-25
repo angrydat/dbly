@@ -19,7 +19,70 @@ from dbly.model import (
     Severity,
     Step,
 )
-from dbly.repo import Repo
+from dbly.repo import FileChange, Repo
+
+
+def _object_exists(adapter: Adapter, obj: ParsedObject) -> bool:
+    try:
+        if obj.kind is ObjectKind.TABLE:
+            return adapter.table_exists(obj.id.schema, obj.id.name)
+        return adapter.has_object(obj.kind, obj.id.schema, obj.id.name)
+    except Exception:  # noqa: BLE001 — treat an unresolvable check as "not present"
+        return False
+
+
+def _dependency_closure(
+    repo: Repo, adapter: Adapter, to_ref: str, seed_paths: set[Path], dialect: str | None
+) -> set[Path]:
+    """Files defining the **missing** dependency closure of the seed objects.
+
+    A scoped deploy (``--schema``/``--path``) may reference objects in other schemas (a
+    cross-schema FK, a view over another schema's table). With ``--with-deps`` we pull in the
+    specific objects it needs that **aren't already in the target** — resolved from the full
+    repo graph — and stop at anything that already exists (an existing object's own
+    dependencies are, by definition, already satisfied). So a new schema pulls in only the
+    handful of objects genuinely missing, never whole existing schemas. Dependencies dbly can't
+    resolve to a repo file are left to the pre-flight warning.
+    """
+    # Objects can be *referenced* (FK target, FROM table/view, called function) — a trigger or
+    # grant never is, and it collides on name with its table (a trigger ``gzp.funkt`` vs table
+    # ``gzp.funkt``), so exclude those as dependency targets; a TABLE always wins a name clash.
+    _TARGET_KINDS = {
+        ObjectKind.TABLE, ObjectKind.VIEW, ObjectKind.SEQUENCE,
+        ObjectKind.FUNCTION, ObjectKind.PROCEDURE, ObjectKind.TYPE,
+    }
+    by_key: dict[str, tuple[Path, ParsedObject]] = {}
+    for rel in repo.all_object_files(to_ref):
+        try:
+            objs = parsing.parse_file(
+                repo.read_at(to_ref, rel), rel, default_schema=repo.schema_for(rel), dialect=dialect
+            )
+        except Exception:  # noqa: BLE001 — unparseable file can't contribute edges
+            continue
+        for obj in objs:
+            if obj.kind not in _TARGET_KINDS:
+                continue
+            existing = by_key.get(obj.id.key())
+            if existing is None or (existing[1].kind is not ObjectKind.TABLE):
+                by_key[obj.id.key()] = (rel, obj)
+
+    needed = set(seed_paths)
+    queue = [dep for k, (p, o) in by_key.items() if p in seed_paths for dep in o.depends_on]
+    seen: set[str] = set()
+    while queue:
+        dep = queue.pop()
+        if dep in seen:
+            continue
+        seen.add(dep)
+        entry = by_key.get(dep)
+        if entry is None:
+            continue  # not a repo object → pre-flight warning handles it
+        path, obj = entry
+        if path in needed or _object_exists(adapter, obj):
+            continue  # already deploying it, or it already exists → stop the walk here
+        needed.add(path)
+        queue.extend(obj.depends_on)
+    return needed
 
 
 def build_plan(
@@ -30,6 +93,7 @@ def build_plan(
     to_ref: str,
     target: str,
     dialect: str | None,
+    with_deps: bool = False,
 ) -> Plan:
     plan = Plan(target=target, from_ref=from_ref, to_ref=to_ref)
 
@@ -46,6 +110,14 @@ def build_plan(
         ]
 
     changes = repo.changed_files(from_ref, to_ref)
+
+    # --with-deps on a scoped deploy: pull in the specific objects the selection depends on
+    # (resolved from the full repo graph) as additive create-if-missing steps — not whole schemas.
+    if with_deps and repo.has_selection:
+        seed = {fc.path for fc in changes if fc.change_type is not ChangeType.DELETED}
+        extra = _dependency_closure(repo, adapter, to_ref, seed, dialect) - seed
+        known = {fc.path for fc in changes}
+        changes += [FileChange(p, ChangeType.ADDED) for p in sorted(extra) if p not in known]
 
     # Bucket by kind so the plan is emitted in dependency-safe order regardless of file
     # order: sequences → tables → indexes → replaceable (views/functions/…).

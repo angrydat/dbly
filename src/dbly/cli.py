@@ -125,6 +125,7 @@ def _make_plan(
     repo_path: Path, target: str, from_ref: Optional[str], to_ref: str,
     *, worktree: bool = False,
     schemas: Optional[list[str]] = None, paths: Optional[list[str]] = None,
+    with_deps: bool = False,
 ) -> Plan:
     project = load_project(repo_path)
     repo = _open_repo(repo_path, project, schemas=schemas, paths=paths)
@@ -140,7 +141,7 @@ def _make_plan(
         return build_plan(
             repo, adapter,
             from_ref=resolved_from, to_ref=resolved_to,
-            target=target, dialect=dialect,
+            target=target, dialect=dialect, with_deps=with_deps,
         )
     finally:
         adapter.dispose()
@@ -169,10 +170,15 @@ def plan(
     path: Optional[list[str]] = typer.Option(
         None, "--path", help="limit to this subpath under object_root; repeatable."
     ),
+    with_deps: bool = typer.Option(
+        False, "--with-deps",
+        help="also deploy the specific objects the selection depends on (cross-schema FKs, "
+             "referenced views/tables) — their dependency closure, not their whole schemas.",
+    ),
 ) -> None:
     """Compute and show the deployment plan."""
     plan_obj = _make_plan(repo_path, target, from_ref, to, worktree=worktree,
-                          schemas=schema, paths=path)
+                          schemas=schema, paths=path, with_deps=with_deps)
     report.render_plan(plan_obj, console, ref_names=_decorations(repo_path, plan_obj))
     if out:
         out.write_text(report.plan_to_yaml(plan_obj), encoding="utf-8")
@@ -211,13 +217,18 @@ def apply(
     path: Optional[list[str]] = typer.Option(
         None, "--path", help="limit to this subpath under object_root; repeatable."
     ),
+    with_deps: bool = typer.Option(
+        False, "--with-deps",
+        help="also deploy the specific objects the selection depends on (dependency closure).",
+    ),
 ) -> None:
     """Apply a plan to the target database (re-computes one unless a file is given)."""
     if plan_file is not None:
         plan_obj = report.plan_from_yaml(plan_file.read_text(encoding="utf-8"))
         target = plan_obj.target
     else:
-        plan_obj = _make_plan(repo_path, target, from_ref, to, schemas=schema, paths=path)
+        plan_obj = _make_plan(repo_path, target, from_ref, to, schemas=schema, paths=path,
+                              with_deps=with_deps)
 
     report.render_plan(plan_obj, console, ref_names=_decorations(repo_path, plan_obj))
 

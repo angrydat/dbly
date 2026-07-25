@@ -568,7 +568,6 @@ def test_grants_are_apply_only_not_drift(tmp_path: Path):
 
 def test_plan_creates_missing_schema_first(tmp_path: Path, monkeypatch):
     """On a greenfield target, the schema of a managed object is created before the object."""
-    from dbly.model import ObjectKind
     repo_root = tmp_path / "db"
     (repo_root / "download").mkdir(parents=True)
     _init_repo(repo_root)
@@ -609,4 +608,33 @@ def test_tables_ordered_by_fk_dependency(tmp_path: Path):
     # and it actually applies cleanly (FK target exists first)
     adapter.apply([s.sql for s in plan.steps])
     assert adapter.table_exists(None, "cache") and adapter.table_exists(None, "paket")
+    adapter.dispose()
+
+
+def test_with_deps_pulls_only_missing_cross_schema_dependency(tmp_path: Path):
+    """--with-deps on a scoped deploy pulls a referenced object from another schema — but only
+    if it's missing — without dragging in that schema's other objects."""
+    repo_root = tmp_path / "db"
+    for d in ("schema/app", "schema/shared"):
+        (repo_root / d).mkdir(parents=True)
+    _init_repo(repo_root)
+    (repo_root / "schema/app/orders.tbl").write_text(
+        "CREATE TABLE app.orders (id INTEGER PRIMARY KEY, "
+        "cust_id INTEGER REFERENCES shared.customer(id));", encoding="utf-8")
+    (repo_root / "schema/shared/customer.tbl").write_text(
+        "CREATE TABLE shared.customer (id INTEGER PRIMARY KEY);", encoding="utf-8")
+    (repo_root / "schema/shared/unrelated.tbl").write_text(
+        "CREATE TABLE shared.unrelated (id INTEGER);", encoding="utf-8")  # must NOT be pulled
+    ref = _commit(repo_root, "v1")
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(tmp_path / "d.db")))
+    repo = Repo(repo_root, object_root="schema", select_schemas=["app"])
+    plan = build_plan(repo, adapter, from_ref=None, to_ref=ref,
+                      target="sqlite", dialect="sqlite", with_deps=True)
+    tables = {s.title for s in plan.steps if s.kind.value == "table"}
+    assert "create table app.orders" in tables
+    assert "create table shared.customer" in tables        # missing dep pulled
+    assert "create table shared.unrelated" not in tables    # unrelated sibling NOT pulled
+    # and customer is ordered before orders (FK-safe)
+    order = [s.title for s in plan.steps if s.kind.value == "table"]
+    assert order.index("create table shared.customer") < order.index("create table app.orders")
     adapter.dispose()

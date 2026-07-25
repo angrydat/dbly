@@ -7,7 +7,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.13.0] — 2026-07-25
+## [0.14.0] — 2026-07-25
+
+### Added
+
+- **`--with-deps`: isolated deploy that pulls in what it needs.** `plan`/`apply --schema X
+  --with-deps` deploys schema `X` plus the *specific* objects it depends on that aren't already
+  in the target (a cross-schema FK target, a referenced table/view/function) — their missing
+  dependency closure, resolved from the full repo graph. It stops at anything that already
+  exists, so it never drags in whole existing schemas or proposes to modify their objects.
+
+### Fixed
+
+- **Overloaded functions are no longer dropped.** Two functions with the same name but
+  different signatures (e.g. `fn(text[])` + `fn(text)` in one file) share an object key;
+  `topological_order` deduplicated them, so one overload was never deployed — breaking the
+  other that called it. Overloads are now kept together in file order.
+- **Function-call ordering.** A trigger/view that calls a repo function now orders that
+  function first (function references — sqlglot `Anonymous` — are captured as graph edges;
+  calls buried in PL/pgSQL bodies remain out of reach and rely on file order).
+- **Unqualified references resolve to the object's schema**, so a same-schema FK/`FROM` links
+  to the right object and a table's own name isn't mistaken for a self-dependency.
 
 ### Fixed
 

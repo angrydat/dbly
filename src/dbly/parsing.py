@@ -77,12 +77,29 @@ def _identity(e: exp.Expression, default_schema: str | None) -> ObjectId:
     return ObjectId(schema=default_schema, name=name)
 
 
-def _dependencies(e: exp.Expression, self_key: str) -> set[str]:
-    """Referenced tables/views — the edges of the dependency DAG (best-effort)."""
+def _dependencies(e: exp.Expression, self_key: str, default_schema: str | None) -> set[str]:
+    """Referenced tables/views — the edges of the dependency DAG (best-effort).
+
+    An unqualified reference is resolved against the object's own schema (``default_schema``),
+    so a same-schema FK/``FROM`` matches the referenced object's qualified key — and a table's
+    own unqualified name in its ``CREATE`` doesn't read as a self-dependency.
+    """
     deps: set[str] = set()
     for tbl in e.find_all(exp.Table):
-        oid = ObjectId(schema=tbl.db or None, name=tbl.name)
+        schema = tbl.db or default_schema
+        oid = ObjectId(schema=schema or None, name=tbl.name)
         key = oid.key()
+        if key and key != self_key:
+            deps.add(key)
+    # Function calls (a trigger's EXECUTE FUNCTION, a view's FROM func(), a call in a body) are
+    # exp.Anonymous to sqlglot — capture them too, so a function is ordered before the trigger/
+    # view that calls it. Names are qualified with the object's schema; built-ins that resolve
+    # to no repo object are harmlessly ignored by topological_order / the closure.
+    for fn in e.find_all(exp.Anonymous):
+        name = fn.this if isinstance(fn.this, str) else None
+        if not name:
+            continue
+        key = ObjectId(schema=default_schema or None, name=name).key()
         if key and key != self_key:
             deps.add(key)
     return deps
@@ -109,7 +126,7 @@ def parse_file(
         if kind is None:
             continue  # not an object definition (e.g. a comment-only statement)
         oid = _identity(stmt, default_schema)
-        deps = _dependencies(stmt, oid.key())
+        deps = _dependencies(stmt, oid.key(), oid.schema)
         objects.append(
             ParsedObject(
                 id=oid,
@@ -293,19 +310,25 @@ def topological_order(objects: list[ParsedObject]) -> list[ParsedObject]:
     Kahn's algorithm over the in-repo dependency graph. Edges to objects outside this set
     (already-deployed dependencies) are ignored. Cycles are broken deterministically and
     left to the adapter's retry-until-stable fallback.
+
+    Objects that share a key (e.g. overloaded functions — same name, different signatures) are
+    kept together as a group in their original (file) order, never deduplicated away.
     """
-    by_key = {o.id.key(): o for o in objects}
-    in_repo = set(by_key)
+    groups: dict[str, list[ParsedObject]] = {}
+    for o in objects:
+        groups.setdefault(o.id.key(), []).append(o)
+    in_repo = set(groups)
     incoming: dict[str, set[str]] = {
-        k: {d for d in by_key[k].depends_on if d in in_repo} for k in by_key
+        k: {d for obj in groups[k] for d in obj.depends_on if d in in_repo and d != k}
+        for k in groups
     }
-    ordered: list[ParsedObject] = []
+    ordered_keys: list[str] = []
     ready = sorted(k for k, deps in incoming.items() if not deps)
     seen: set[str] = set()
     while ready:
         k = ready.pop(0)
         seen.add(k)
-        ordered.append(by_key[k])
+        ordered_keys.append(k)
         for other, deps in incoming.items():
             if other in seen or other in ready:
                 continue
@@ -313,6 +336,5 @@ def topological_order(objects: list[ParsedObject]) -> list[ParsedObject]:
                 ready.append(other)
         ready.sort()
     # leftovers (cycles / unresolved) appended deterministically — retry handles them
-    for k in sorted(set(by_key) - seen):
-        ordered.append(by_key[k])
-    return ordered
+    ordered_keys += sorted(set(groups) - seen)
+    return [obj for k in ordered_keys for obj in groups[k]]
