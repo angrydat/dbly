@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-07-25
+
+### Fixed
+
+- **Last view-drift false positive removed.** `pg_get_viewdef` wraps a `FROM` join in an
+  alias-less subquery (`FROM (a JOIN b)`) where the source wrote it flat; the view-canonical
+  form now flattens that, so an identical view reports clean. On the real `download` schema,
+  reported view drift is now 0 (all 41 originally reported were normalization artifacts).
+
 ## [0.14.0] — 2026-07-25
 
 ### Added

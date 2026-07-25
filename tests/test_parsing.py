@@ -201,6 +201,16 @@ def test_canonical_view_query_ignores_pg_rewrite_noise():
            parsing.canonical_view_query(changed, dialect="postgres")
 
 
+def test_canonical_view_query_flattens_parenthesized_from_join():
+    cvq = parsing.canonical_view_query
+    # pg_get_viewdef wraps a FROM join in an alias-less subquery; the source wrote it flat
+    assert cvq("SELECT a.x FROM (a LEFT JOIN b ON a.i = b.i)", dialect="postgres") == \
+           cvq("SELECT a.x FROM a LEFT JOIN b ON a.i = b.i", dialect="postgres")
+    # a genuine join-type change still differs; an aliased derived table is left intact
+    assert cvq("SELECT x FROM a LEFT JOIN b ON a.i=b.i", dialect="postgres") != \
+           cvq("SELECT x FROM a INNER JOIN b ON a.i=b.i", dialect="postgres")
+
+
 def test_canonical_view_query_is_structural_not_textual():
     cvq = parsing.canonical_view_query
     # redundant parens anywhere (predicate, projection, NULLIF arg) → same structure

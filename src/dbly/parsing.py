@@ -219,6 +219,22 @@ def _normalized_view_expr(sql: str | None, *, dialect: str | None = None) -> exp
             col.set("table", None)
     for paren in list(query.find_all(exp.Paren)):
         paren.replace(paren.this)
+    # pg_get_viewdef may wrap a FROM join in an alias-less subquery
+    # (``FROM (a JOIN b)`` → a Subquery around the join) where the source wrote it flat.
+    # Flatten such a subquery — hoist its table + joins to the outer FROM — so the two forms
+    # match. An *aliased* subquery is a real derived table and is left untouched.
+    for sub in list(query.find_all(exp.Subquery)):
+        frm = sub.parent
+        if sub.args.get("alias") or not isinstance(frm, exp.From):
+            continue
+        inner = sub.this
+        if not isinstance(inner, exp.Table):  # a genuine derived table (SELECT …) → keep
+            continue
+        joins = list(inner.args.get("joins") or []) + list(sub.args.get("joins") or [])
+        inner.set("joins", None)
+        frm.set("this", inner)
+        select = frm.parent
+        select.set("joins", joins + list(select.args.get("joins") or []))
     return query
 
 

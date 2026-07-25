@@ -79,14 +79,16 @@ expected: **a database deployment tool needs far-reaching CREATE rights by defin
 
 On a real schema this took reported view drift from 41 → 1.
 
+On the real `download` schema this took reported view drift from **41 → 0** — every one of the
+41 was an artifact (cast elision, qualification, redundant parens, a parenthesized `FROM` join),
+none a real change.
+
 ## Known limitations
 
-- **Parenthesized `FROM` joins.** `FROM (a JOIN b ON …)` parses to a different AST shape than
-  `FROM a JOIN b ON …` (an alias-less sub-node), which our normalization does not yet unwrap —
-  such a view can still show a *cosmetic* diff. `--show-diff` makes it obvious it is cosmetic.
-  Not worth fragile, version-specific AST surgery for now.
 - **Body semantics, not equivalence.** We compare canonical structure, not logical equivalence;
   two views computing the same result by different SQL are (correctly) reported as different.
+- **AND/OR precedence via sqlglot rendering** is a rare blind spot in the ``--show-diff``
+  *display* (the hash comparison is structural and unaffected).
 
 ## Consequences
 
