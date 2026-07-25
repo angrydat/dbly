@@ -77,7 +77,7 @@ expected: **a database deployment tool needs far-reaching CREATE rights by defin
    `pg_get_viewdef` copies verbatim from the original source text — the dominant residual after
    layer 1.
 
-On a real schema this took reported view drift from 41 → 1.
+On a real schema this took reported view drift from 41 → 0 (all 41 were artifacts).
 
 On the real `download` schema this took reported view drift from **41 → 0** — every one of the
 41 was an artifact (cast elision, qualification, redundant parens, a parenthesized `FROM` join),
@@ -98,7 +98,16 @@ none a real change.
 - **Negative / costs:** `check` now creates a throwaway view per changed view (one extra
   round-trip each); needs `CREATE` privilege (graceful fallback to column signature otherwise);
   Oracle/SQL Server require an explicit create+drop rather than a rolled-back temp view.
-- **Rollout:** PostgreSQL first (validated live). Oracle, SQL Server and SQLite follow using the
-  same contract — the adapter exposes a `canonical_view(desired_sql, search_path) -> str` probe
-  and a `live_view_canonical(id) -> str`; the drift layer stays engine-agnostic. **Not done
-  until all four engines implement it.**
+- **Rollout:** PostgreSQL first (validated live via `canonicalize_view`). The drift layer is
+  engine-agnostic and falls back to the raw definition (still structurally normalized) when an
+  adapter has no round-trip, so Oracle/SQL Server work today — just without engine-specific
+  rewrite handling (e.g. cast elision), so a residual false positive is possible there. SQLite
+  stores views ~verbatim and needs no round-trip.
+
+### Deferred (2026-07-25)
+
+`canonicalize_view` for **Oracle and SQL Server** is intentionally deferred until a live
+instance of each is available to verify against — shipping unverified DB round-trip code (which
+also needs an explicit create+drop on Oracle, since its DDL auto-commits) has little value.
+Implement it when a test target exists; the structural layer already covers the common cases in
+the meantime.
