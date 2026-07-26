@@ -125,7 +125,7 @@ deploys, migrations, drift-checking, hooks and the full command reference.
 - **[Usage guide](docs/USAGE.md)** — task-oriented walkthrough of every workflow.
 - **Architecture decisions:** [ADR 0001 — view drift via engine canonicalization](docs/adr/0001-view-drift-via-engine-canonicalization.md) ·
   [ADR 0002 — per-file application of replaceable objects](docs/adr/0002-per-file-application-of-replaceable-objects.md).
-- **[CHANGELOG](CHANGELOG.md)** · **[Backlog / ideas](TODO.md)**.
+- **[CHANGELOG](CHANGELOG.md)**.
 
 ## Built for trunk-based development
 

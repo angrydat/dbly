@@ -25,3 +25,6 @@ htmlcov/
 *.local.properties
 *.connection.properties
 secrets/
+
+# Internal backlog — not for the public repo
+TODO.md
