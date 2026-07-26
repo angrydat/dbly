@@ -664,3 +664,32 @@ def test_baseline_records_ref_and_migrations_without_running_sql(tmp_path: Path)
     assert "0001_x.sql" in adapter.applied_migrations()      # migration marked applied, not run
     assert not adapter.table_exists(None, "kunde")           # NO object SQL ran — table absent
     adapter.dispose()
+
+
+def test_replaceable_applied_per_file_verbatim(tmp_path: Path):
+    """A replaceable file with several statements is one script step, applied whole & in order."""
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text("CREATE TABLE kunde (id INTEGER, name TEXT);", encoding="utf-8")
+    (repo_root / "views.vw").write_text(
+        "-- two views, second depends on first\n"
+        "CREATE VIEW v_a AS SELECT id, name FROM kunde;\n"
+        "CREATE VIEW v_b AS SELECT name FROM v_a WHERE name IS NOT NULL;\n", encoding="utf-8")
+    ref = _commit(repo_root, "v1")
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(tmp_path / "s.db")))
+    repo = Repo(repo_root)
+    plan = build_plan(repo, adapter, from_ref=None, to_ref=ref, target="sqlite", dialect="sqlite")
+
+    script_steps = [s for s in plan.steps if s.script]
+    assert len(script_steps) == 1                              # one step for the whole file
+    assert "CREATE VIEW v_a" in script_steps[0].sql and "CREATE VIEW v_b" in script_steps[0].sql
+    assert "-- two views" in script_steps[0].sql               # comment preserved (verbatim file)
+
+    # apply the way the CLI does: statement steps transactionally, script steps via run_init_script
+    adapter.apply([s.sql for s in plan.steps if not s.script])
+    for s in script_steps:
+        adapter.run_init_script(s.sql)
+    views = {r for r in ("v_a", "v_b")}
+    assert all(adapter.has_object(ObjectKind.VIEW, None, v) for v in views)  # both created, in order
+    adapter.dispose()

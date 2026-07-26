@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-07-26
+
+### Changed
+
+- **Replaceable objects are applied per source file, verbatim (ADR 0002).** Views, functions,
+  procedures, triggers, types and grants now deploy their raw source file (dependency-ordered,
+  one step per file) via the engine's multi-statement runner, instead of a single re-rendered
+  `CREATE` statement per object. This preserves `SET search_path`, `ALTER … OWNER`, comments,
+  intra-file statement order and function overloads — everything the author wrote in the file —
+  and avoids re-rendering procedural bodies. The plan shows one row per file (a multi-object
+  file notes "+N more in <file>").
+
 ## [0.15.0] — 2026-07-26
 
 ### Added
@@ -47,6 +59,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Unqualified references resolve to the object's schema**, so a same-schema FK/`FROM` links
   to the right object and a table's own name isn't mistaken for a self-dependency.
 
+## [0.13.0] — 2026-07-25
+
 ### Fixed
 
 - **Tables are created in FK-dependency order.** A table with an inline
@@ -62,6 +76,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Clean `apply` failure.** A failed statement now prints a one-line cause (and whether the
   transaction rolled back) rather than a full Python traceback.
 
+## [0.12.0] — 2026-07-25
+
 ### Fixed
 
 - **Greenfield deploy no longer fails on a missing schema.** `plan`/`apply` now emit
@@ -75,6 +91,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `ObjectKind.SCHEMA` so the schema step renders as `+ create schema <name>`.
+
+## [0.11.0] — 2026-07-24
 
 ### Changed
 
@@ -104,6 +122,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Engine round-trip is implemented for **PostgreSQL**. Oracle, SQL Server and SQLite still use
   the direct definition comparison and will adopt the round-trip in a follow-up (ADR 0001).
+
+## [0.9.0] — 2026-07-24
 
 ### Added
 

@@ -199,16 +199,30 @@ def build_plan(
     for obj in indexes:
         _plan_create_if_missing(adapter, plan, obj)
 
-    # replaceable objects: dependency-ordered, re-applied wholesale
+    # Replaceable objects: re-applied wholesale, **per source file** (ADR 0002). Dependency-
+    # ordered, then emitted one step per file (in first-seen order) carrying the file's *raw*
+    # content — so SET search_path / ALTER … OWNER / comments / intra-file statement order /
+    # function overloads are preserved instead of a re-rendered single statement.
+    seen_files: set[Path] = set()
     for obj in parsing.topological_order(replaceable):
+        src = obj.source_file
+        if src in seen_files:
+            continue
+        seen_files.add(src)
+        file_objs = [o for o in replaceable if o.source_file == src]
+        raw = repo.read_at(to_ref, src)
+        title = f"apply {obj.kind.value} {obj.id}"
+        if len(file_objs) > 1:
+            title += f" (+{len(file_objs) - 1} more in {src.name})"
         plan.steps.append(
             Step(
-                title=f"apply {obj.kind.value} {obj.id}",
+                title=title,
                 object_id=obj.id,
                 kind=obj.kind,
                 severity=Severity.ADDITIVE,
-                sql=obj.sql if obj.sql.strip().endswith(";") else obj.sql + ";",
-                source_file=obj.source_file,
+                sql=raw,
+                source_file=src,
+                script=True,
             )
         )
     return plan

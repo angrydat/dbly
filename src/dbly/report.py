@@ -296,6 +296,7 @@ def plan_to_yaml(plan: Plan) -> str:
                 "severity": s.severity.value,
                 "source_file": str(s.source_file) if s.source_file else None,
                 "note": s.note,
+                "script": s.script,
                 "sql": s.sql,
             }
             for s in plan.steps
@@ -328,6 +329,7 @@ def plan_from_yaml(text: str) -> Plan:
                 sql=s["sql"],
                 source_file=Path(s["source_file"]) if s.get("source_file") else None,
                 note=s.get("note"),
+                script=bool(s.get("script", False)),
             )
         )
     return plan

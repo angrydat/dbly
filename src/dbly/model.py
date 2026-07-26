@@ -130,6 +130,10 @@ class Step:
     sql: str
     source_file: Path | None = None
     note: str | None = None
+    #: apply ``sql`` as a whole multi-statement script (verbatim file), not one statement.
+    #: Replaceable objects deploy their raw source file so ``SET search_path`` / ``ALTER …
+    #: OWNER`` / overloads / intra-file order are preserved (ADR 0002).
+    script: bool = False
 
 
 @dataclass(slots=True)

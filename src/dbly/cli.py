@@ -240,11 +240,16 @@ def apply(
         )
         raise typer.Exit(code=1)
 
-    statements = [
-        s.sql for s in plan_obj.steps
+    to_apply = [
+        s for s in plan_obj.steps
         if allow_destructive or s.severity is not Severity.DESTRUCTIVE
     ]
-    if not statements and not plan_obj.migrations and not plan_obj.baselined:
+    # Statement steps (schema/table/index) run transactionally as one batch; script steps
+    # (replaceable objects, raw per-file content) run via the engine's multi-statement runner,
+    # after, in order (ADR 0002). Replaceable objects are idempotent, so per-file is safe.
+    stmt_steps = [s for s in to_apply if not s.script]
+    script_steps = [s for s in to_apply if s.script]
+    if not to_apply and not plan_obj.migrations and not plan_obj.baselined:
         console.print("[green]nothing to apply.[/green]")
         return
 
@@ -264,11 +269,13 @@ def apply(
             adapter.run_init_script(m.sql)  # engine-aware multi-statement / PL-SQL runner
             adapter.record_migration(plan_obj.to_ref, m.id)
             console.print(f"  [green]✓[/green] migration {m.id}[green]  OK[/green]")
-        applied_steps = [s for s in plan_obj.steps if s.sql in statements]
-        if statements:
-            adapter.apply(statements)
-            for s in applied_steps:
+        if stmt_steps:
+            adapter.apply([s.sql for s in stmt_steps])
+            for s in stmt_steps:
                 console.print(f"  [green]✓[/green] {s.title}[green]  OK[/green]")
+        for s in script_steps:  # replaceable objects, verbatim per-file
+            adapter.run_init_script(s.sql)
+            console.print(f"  [green]✓[/green] {s.title}[green]  OK[/green]")
         adapter.record_deploy(plan_obj.to_ref, migration_ids=[])
         _run_hooks(repo, "post", py_interpreter)
     except Exception as exc:  # noqa: BLE001 — surface a concise cause, not a stack trace
@@ -283,7 +290,7 @@ def apply(
     finally:
         adapter.dispose()
     console.print(
-        f"\n[green]✓ Apply complete![/green] {len(statements)} step(s), "
+        f"\n[green]✓ Apply complete![/green] {len(stmt_steps) + len(script_steps)} step(s), "
         f"{len(plan_obj.migrations)} migration(s); deployed ref → "
         f"[cyan]{plan_obj.to_ref[:8] if len(plan_obj.to_ref) >= 8 else plan_obj.to_ref}[/cyan]"
     )
