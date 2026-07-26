@@ -72,11 +72,14 @@ def _main(
 def _open_repo(
     repo_path: Path, project: ProjectConfig,
     *, schemas: Optional[list[str]] = None, paths: Optional[list[str]] = None,
+    cfg: Optional[ConnectionConfig] = None,
 ) -> Repo:
     return Repo(
         repo_path,
         object_root=project.object_root,
         extra_ignore=project.ignore,
+        layout=project.layout,
+        target_database=(cfg.extra.get("database") if cfg else None),
         select_schemas=schemas or None,
         select_paths=paths or None,
     )
@@ -128,8 +131,8 @@ def _make_plan(
     with_deps: bool = False,
 ) -> Plan:
     project = load_project(repo_path)
-    repo = _open_repo(repo_path, project, schemas=schemas, paths=paths)
     cfg = _resolve_target(project, repo_path, target)
+    repo = _open_repo(repo_path, project, schemas=schemas, paths=paths, cfg=cfg)
     dialect = sqlglot_dialect(detect_dialect(cfg))
     adapter = get_adapter(cfg)
     try:
@@ -254,8 +257,8 @@ def apply(
         return
 
     project = load_project(repo_path)
-    repo = _open_repo(repo_path, project)
     cfg = _resolve_target(project, repo_path, target)
+    repo = _open_repo(repo_path, project, cfg=cfg)
     adapter = get_adapter(cfg)
     try:
         _run_hooks(repo, "pre", py_interpreter)
@@ -351,8 +354,8 @@ def baseline(
     applied (recorded, not run). Nothing in the schema is touched.
     """
     project = load_project(repo_path)
-    repo = _open_repo(repo_path, project)
     cfg = _resolve_target(project, repo_path, target)
+    repo = _open_repo(repo_path, project, cfg=cfg)
     adapter = get_adapter(cfg)
     try:
         ref = repo.resolve_ref(to)
@@ -433,8 +436,8 @@ def check(
 ) -> None:
     """Detect drift: compare the desired state at <to> against the live database."""
     project = load_project(repo_path)
-    repo = _open_repo(repo_path, project, schemas=schema, paths=path)
     cfg = _resolve_target(project, repo_path, target)
+    repo = _open_repo(repo_path, project, schemas=schema, paths=path, cfg=cfg)
     dialect = sqlglot_dialect(detect_dialect(cfg))
     resolved_to = repo.resolve_ref(WORKTREE if worktree else to)
     adapter = get_adapter(cfg)

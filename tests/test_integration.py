@@ -693,3 +693,33 @@ def test_replaceable_applied_per_file_verbatim(tmp_path: Path):
     views = {r for r in ("v_a", "v_b")}
     assert all(adapter.has_object(ObjectKind.VIEW, None, v) for v in views)  # both created, in order
     adapter.dispose()
+
+
+def test_layout_database_filter_and_filename_order(tmp_path: Path):
+    from dbly.project import LayoutConfig
+    repo_root = tmp_path / "db"
+    for d in ("appdb/sales", "otherdb/sales"):
+        (repo_root / d).mkdir(parents=True)
+    _init_repo(repo_root)
+    # <database>/<schema>/<object> layout
+    (repo_root / "appdb/sales/customer.tbl").write_text("CREATE TABLE sales.customer (id INTEGER);", encoding="utf-8")
+    (repo_root / "otherdb/sales/thing.tbl").write_text("CREATE TABLE sales.thing (id INTEGER);", encoding="utf-8")
+    # two replaceable views whose filenames encode order (02 depends on nothing; test order only)
+    (repo_root / "appdb/sales/02_second.vw").write_text("CREATE VIEW sales.v2 AS SELECT 1 AS x;", encoding="utf-8")
+    (repo_root / "appdb/sales/01_first.vw").write_text("CREATE VIEW sales.v1 AS SELECT 1 AS x;", encoding="utf-8")
+    ref = _commit(repo_root, "v1")
+
+    lay = LayoutConfig(schema_depth=2, database_depth=1, order="filename")
+    # database filter: only appdb's files, otherdb excluded
+    repo = Repo(repo_root, layout=lay, target_database="appdb")
+    files = {p.as_posix() for p in repo.list_files(ref)}
+    assert any("appdb/sales/customer.tbl" in f for f in files)
+    assert not any("otherdb/" in f for f in files)             # other database filtered out
+    assert repo.schema_for(Path("appdb/sales/customer.tbl")) == "sales"  # schema at depth 2
+
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(tmp_path / "l.db")))
+    plan = build_plan(repo, adapter, from_ref=None, to_ref=ref, target="sqlite", dialect="sqlite")
+    view_titles = [s.title for s in plan.steps if s.kind.value == "view"]
+    assert view_titles.index(next(t for t in view_titles if "v1" in t)) < \
+           view_titles.index(next(t for t in view_titles if "v2" in t))  # 01_ before 02_
+    adapter.dispose()

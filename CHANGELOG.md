@@ -7,6 +7,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-07-26
+
+### Added
+
+- **Configurable repository file layout (`[layout]` in `dbly.toml`, ADR 0003).** Pin how dbly
+  reads a repo instead of assuming one convention:
+  - `schema_from` — where the schema name comes from: `folder` (default), `search-path` (the
+    file's `SET search_path`), or `qualified-name` (the DDL must qualify it).
+  - `schema_depth` / `database_depth` — which path segment under `object_root` is the schema
+    (default 1) and, for `<database>/<schema>/…` repos, the database (a multi-database repo then
+    deploys only the target profile's database).
+  - `type_from` — object kind from `sql` (parse, default) or `extension`; extension mode also
+    gives a **filename-based identity fallback**, so a replaceable file the parser can't read
+    (PostGIS/PL-pgSQL) is still recognized and applied verbatim instead of dropped.
+  - `order` — apply replaceable objects by `dependency` (default) or `filename`.
+
+  All defaults equal the previous behaviour; `[layout]` is purely additive.
+
 ## [0.16.0] — 2026-07-26
 
 ### Changed

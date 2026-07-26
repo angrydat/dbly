@@ -54,8 +54,10 @@ def _dependency_closure(
     by_key: dict[str, tuple[Path, ParsedObject]] = {}
     for rel in repo.all_object_files(to_ref):
         try:
+            csql = repo.read_at(to_ref, rel)
             objs = parsing.parse_file(
-                repo.read_at(to_ref, rel), rel, default_schema=repo.schema_for(rel), dialect=dialect
+                csql, rel, default_schema=repo.schema_for(rel, csql), dialect=dialect,
+                type_from=repo.layout.type_from,
             )
         except Exception:  # noqa: BLE001 — unparseable file can't contribute edges
             continue
@@ -130,8 +132,9 @@ def build_plan(
             _plan_deletion(repo, plan, fc.path, from_ref, dialect)
             continue
         sql = repo.read_at(to_ref, fc.path)
-        schema_hint = repo.schema_for(fc.path)
-        for obj in parsing.parse_file(sql, fc.path, default_schema=schema_hint, dialect=dialect):
+        schema_hint = repo.schema_for(fc.path, sql)
+        for obj in parsing.parse_file(sql, fc.path, default_schema=schema_hint, dialect=dialect,
+                                      type_from=repo.layout.type_from):
             if obj.kind is ObjectKind.SEQUENCE:
                 sequences.append(obj)
             elif obj.kind is ObjectKind.TABLE:
@@ -203,8 +206,13 @@ def build_plan(
     # ordered, then emitted one step per file (in first-seen order) carrying the file's *raw*
     # content — so SET search_path / ALTER … OWNER / comments / intra-file statement order /
     # function overloads are preserved instead of a re-rendered single statement.
+    # order replaceable objects: by dependency (default) or by filename (ADR 0003 order=filename)
+    if repo.layout.order == "filename":
+        ordered_replaceable = sorted(replaceable, key=lambda o: o.source_file.as_posix())
+    else:
+        ordered_replaceable = parsing.topological_order(replaceable)
     seen_files: set[Path] = set()
-    for obj in parsing.topological_order(replaceable):
+    for obj in ordered_replaceable:
         src = obj.source_file
         if src in seen_files:
             continue
@@ -341,8 +349,9 @@ def _plan_deletion(
         sql = repo.read_at(from_ref, path)
     except Exception:  # noqa: BLE001 — file may not exist at from_ref
         return
-    schema_hint = repo.schema_for(path)
-    for obj in parsing.parse_file(sql, path, default_schema=schema_hint, dialect=dialect):
+    schema_hint = repo.schema_for(path, sql)
+    for obj in parsing.parse_file(sql, path, default_schema=schema_hint, dialect=dialect,
+                                  type_from=repo.layout.type_from):
         plan.warnings.append(
             f"{obj.id}: source file deleted — DROP {obj.kind.value} not auto-applied"
         )

@@ -37,6 +37,29 @@ def sqlglot_dialect(environment: str | None) -> str | None:
     return _DIALECTS.get(environment.strip().lower())
 
 
+_SEARCH_PATH_RE = re.compile(
+    r"""set\s+search_path\s*=?\s*to?\s*["']?([A-Za-z_][A-Za-z0-9_$]*)""", re.IGNORECASE
+)
+
+
+def search_path_schema(sql: str | None) -> str | None:
+    """First real schema in a ``SET search_path = <schema>, …``, skipping ``"$user"``.
+
+    For the ``schema_from = "search-path"`` layout (ADR 0003): the file sets its search path and
+    then writes unqualified DDL, so the leading schema on the search path is the target schema.
+    """
+    if not sql:
+        return None
+    for m in re.finditer(
+        r"""(?im)^\s*set\s+search_path\s*(?:=|to)\s*(.+?);""", sql
+    ):
+        for token in m.group(1).split(","):
+            name = token.strip().strip('"').strip("'")
+            if name and name.lower() != "$user":
+                return name
+    return None
+
+
 def _kind_from_expression(e: exp.Expression) -> ObjectKind | None:
     if isinstance(e, exp.Create):
         kind = (e.args.get("kind") or "").upper()
@@ -105,26 +128,50 @@ def _dependencies(e: exp.Expression, self_key: str, default_schema: str | None) 
     return deps
 
 
+_EXTENSION_KINDS = {
+    ".tbl": ObjectKind.TABLE, ".vw": ObjectKind.VIEW, ".fnc": ObjectKind.FUNCTION,
+    ".prc": ObjectKind.PROCEDURE, ".trg": ObjectKind.TRIGGER, ".typ": ObjectKind.TYPE,
+    ".pkg": ObjectKind.PACKAGE, ".seq": ObjectKind.SEQUENCE, ".idx": ObjectKind.INDEX,
+}
+
+
+def kind_from_extension(source_file: Path) -> ObjectKind | None:
+    """Object kind from the file extension (ADR 0003 ``type_from = "extension"``); None for
+    generic ``.sql``/``.ddl`` where the extension says nothing."""
+    return _EXTENSION_KINDS.get(source_file.suffix.lower())
+
+
 def parse_file(
     sql: str,
     source_file: Path,
     *,
     default_schema: str | None = None,
     dialect: str | None = None,
+    type_from: str = "sql",
 ) -> list[ParsedObject]:
     """Parse one source file into the objects it defines.
 
     A file may define multiple objects (e.g. a collected ``grants.sql``). Statements that
-    sqlglot cannot parse are not silently dropped — they raise, so misconfiguration is loud.
+    sqlglot cannot parse normally raise, so misconfiguration is loud — but with
+    ``type_from="extension"`` a file the parser can't read still yields one object (kind from
+    the extension, name from the filename), so it can be applied verbatim instead of dropped.
     """
+    ext_kind = kind_from_extension(source_file) if type_from == "extension" else None
+    try:
+        statements = sqlglot.parse(sql, read=dialect)
+    except Exception:  # noqa: BLE001 — unparseable
+        if ext_kind is not None:  # extension fallback: identity from the filename
+            return [ParsedObject(id=ObjectId(default_schema, source_file.stem), kind=ext_kind,
+                                 sql=sql, source_file=source_file)]
+        raise
     objects: list[ParsedObject] = []
-    statements = sqlglot.parse(sql, read=dialect)
     for stmt in statements:
         if stmt is None:
             continue
-        kind = _kind_from_expression(stmt)
-        if kind is None:
-            continue  # not an object definition (e.g. a comment-only statement)
+        parsed_kind = _kind_from_expression(stmt)
+        if parsed_kind is None:
+            continue  # not an object definition (e.g. a SET / comment-only statement)
+        kind = ext_kind or parsed_kind  # extension mode overrides a mis-identified kind
         oid = _identity(stmt, default_schema)
         deps = _dependencies(stmt, oid.key(), oid.schema)
         objects.append(

@@ -75,6 +75,21 @@ the top level (e.g. `pgsql/schema/<schema>/<object>`): the schema is derived *re
 root*, so `pgsql/schema/sales/customer.tbl` maps to schema `sales`, not `pgsql`. Put root-level
 keys (`object_root`, `environment`, `ignore`) **before** the `[targets]` table (TOML rule).
 
+An optional `[layout]` table pins how dbly reads the repo's file layout — where the schema name
+comes from, how deep it sits, how the object kind and order are determined
+([ADR 0003](docs/adr/0003-configurable-file-layout.md)):
+
+```toml
+[layout]
+schema_from    = "folder"      # folder | search-path | qualified-name
+schema_depth   = 1             # folder mode: which segment under object_root is the schema
+database_depth = 0             # >0 for a <database>/<schema>/… repo (deploys the target DB only)
+type_from      = "sql"         # sql | extension  (extension also rescues files the parser can't read)
+order          = "dependency"  # dependency | filename
+```
+
+All defaults equal the built-in behaviour, so `[layout]` is purely opt-in.
+
 ## Connect
 
 A connection profile (reuses the familiar `connection.properties` format):
@@ -124,7 +139,8 @@ deploys, migrations, drift-checking, hooks and the full command reference.
 
 - **[Usage guide](docs/USAGE.md)** — task-oriented walkthrough of every workflow.
 - **Architecture decisions:** [ADR 0001 — view drift via engine canonicalization](docs/adr/0001-view-drift-via-engine-canonicalization.md) ·
-  [ADR 0002 — per-file application of replaceable objects](docs/adr/0002-per-file-application-of-replaceable-objects.md).
+  [ADR 0002 — per-file application of replaceable objects](docs/adr/0002-per-file-application-of-replaceable-objects.md) ·
+  [ADR 0003 — configurable file layout](docs/adr/0003-configurable-file-layout.md).
 - **[CHANGELOG](CHANGELOG.md)**.
 
 ## Built for trunk-based development

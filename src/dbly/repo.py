@@ -10,10 +10,15 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pathspec
 
+from dbly import parsing
 from dbly.model import ChangeType
+
+if TYPE_CHECKING:
+    from dbly.project import LayoutConfig
 
 _SQL_SUFFIXES = {".sql", ".tbl", ".vw", ".prc", ".fnc", ".pkg", ".trg", ".typ", ".ddl"}
 MIGRATIONS_DIR = "migrations"  # run-once scripts — not declarative objects
@@ -35,7 +40,11 @@ class Repo:
         extra_ignore: list[str] | None = None,
         select_schemas: list[str] | None = None,
         select_paths: list[str] | None = None,
+        layout: "LayoutConfig | None" = None,
+        target_database: str | None = None,
     ):
+        from dbly.project import LayoutConfig  # local import avoids a config→repo cycle
+
         self.root = root.resolve()
         if not (self.root / ".git").exists():
             raise ValueError(f"not a git repository: {self.root}")
@@ -43,6 +52,8 @@ class Repo:
         self.object_root = (
             Path(object_root) if object_root and object_root not in (".", "") else None
         )
+        self.layout = layout or LayoutConfig()
+        self.target_database = target_database
         # optional subset selection (deploy/check only part of the tree)
         self.select_schemas = {s.lower() for s in select_schemas} if select_schemas else None
         self.select_paths = [Path(p) for p in select_paths] if select_paths else None
@@ -91,12 +102,20 @@ class Repo:
                 return False
         return True
 
+    def _database_ok(self, rel: Path) -> bool:
+        """Multi-DB repos (ADR 0003 database_depth): keep only the target database's files."""
+        if self.layout.database_depth <= 0 or not self.target_database:
+            return True
+        db = self.database_for(rel)
+        return db is None or db.lower() == self.target_database.lower()
+
     def _is_object(self, rel: Path) -> bool:
         """A deployable declarative object file (SQL, under object_root, selected, not ignored)."""
         return (
             self._is_sql(rel)
             and not self._is_migration(rel)
             and self._under_object_root(rel)
+            and self._database_ok(rel)
             and self._selected(rel)
             and not self.is_ignored(rel)
         )
@@ -108,6 +127,7 @@ class Repo:
             self._is_sql(rel)
             and not self._is_migration(rel)
             and self._under_object_root(rel)
+            and self._database_ok(rel)
             and not self.is_ignored(rel)
         )
 
@@ -226,19 +246,37 @@ class Repo:
             return (self.root / rel).read_text(encoding="utf-8")
         return self._git("show", f"{ref}:{rel.as_posix()}")
 
-    def schema_for(self, rel: Path) -> str | None:
-        """Best-practice convention: the first path segment names the DB schema.
-
-        With an ``object_root`` set, the segment is taken *relative to that root* — so
-        ``pgsql/schema/bas/foo.tbl`` under root ``pgsql/schema`` yields schema ``bas``.
-        Only a *hint* — the parser overrides it when the DDL is schema-qualified. Returns
-        None when the file sits directly at the (object) root.
-        """
+    def _rel_parts(self, rel: Path) -> tuple[str, ...]:
+        """Path parts relative to ``object_root`` (or the repo root)."""
         r = rel
         if self.object_root is not None:
             try:
                 r = rel.relative_to(self.object_root)
             except ValueError:
-                return None
-        parts = r.parts
-        return parts[0] if len(parts) > 1 else None
+                return ()
+        return r.parts
+
+    def _segment(self, rel: Path, depth: int) -> str | None:
+        """1-based path segment under ``object_root`` (a folder, i.e. not the file itself)."""
+        parts = self._rel_parts(rel)
+        return parts[depth - 1] if depth >= 1 and len(parts) > depth else None
+
+    def database_for(self, rel: Path) -> str | None:
+        """The database segment (ADR 0003 ``database_depth``), or None when not configured."""
+        d = self.layout.database_depth
+        return self._segment(rel, d) if d > 0 else None
+
+    def schema_for(self, rel: Path, sql: str | None = None) -> str | None:
+        """The schema *hint* for a file (ADR 0003 ``schema_from``/``schema_depth``).
+
+        Only a hint — a schema-qualified name in the DDL always overrides it.
+        * ``folder``: the segment at ``schema_depth`` below ``object_root``;
+        * ``search-path``: the first schema in the file's ``SET search_path`` (needs ``sql``);
+        * ``qualified-name``: no hint (the DDL must qualify the name).
+        """
+        mode = self.layout.schema_from
+        if mode == "qualified-name":
+            return None
+        if mode == "search-path":
+            return parsing.search_path_schema(sql)
+        return self._segment(rel, self.layout.schema_depth)

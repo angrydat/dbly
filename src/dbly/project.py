@@ -25,11 +25,23 @@ CONFIG_NAME = "dbly.toml"
 
 
 @dataclass(slots=True)
+class LayoutConfig:
+    """How dbly reads a repo's file layout (ADR 0003). Defaults = the pre-0.17 behaviour."""
+
+    schema_from: str = "folder"       # folder | search-path | qualified-name
+    schema_depth: int = 1             # folder mode: 1-based segment under object_root
+    database_depth: int = 0           # >0: which segment is the database (<db>/<schema>/…)
+    type_from: str = "sql"            # sql | extension
+    order: str = "dependency"         # dependency | filename
+
+
+@dataclass(slots=True)
 class ProjectConfig:
     object_root: str = "."
     environment: str | None = None
     targets: dict[str, str] = field(default_factory=dict)
     ignore: list[str] = field(default_factory=list)
+    layout: LayoutConfig = field(default_factory=LayoutConfig)
 
 
 def load_project(repo_root: Path) -> ProjectConfig:
@@ -46,9 +58,28 @@ def load_project(repo_root: Path) -> ProjectConfig:
     if not isinstance(ignore, list):
         raise ValueError(f"{CONFIG_NAME}: ignore must be a list of patterns")
 
+    lay = data.get("layout") or {}
+    if not isinstance(lay, dict):
+        raise ValueError(f"{CONFIG_NAME}: [layout] must be a table")
+    layout = LayoutConfig(
+        schema_from=_choice(lay, "schema_from", ("folder", "search-path", "qualified-name")),
+        schema_depth=int(lay.get("schema_depth", 1)),
+        database_depth=int(lay.get("database_depth", 0)),
+        type_from=_choice(lay, "type_from", ("sql", "extension")),
+        order=_choice(lay, "order", ("dependency", "filename")),
+    )
+
     return ProjectConfig(
         object_root=str(data.get("object_root", ".")),
         environment=data.get("environment"),
         targets={str(k): str(v) for k, v in targets.items()},
         ignore=[str(p) for p in ignore],
+        layout=layout,
     )
+
+
+def _choice(table: dict, key: str, allowed: tuple[str, ...]) -> str:
+    val = str(table.get(key, allowed[0]))
+    if val not in allowed:
+        raise ValueError(f"{CONFIG_NAME}: [layout].{key} must be one of {', '.join(allowed)}")
+    return val

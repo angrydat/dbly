@@ -79,7 +79,8 @@ def compute_drift(
     for rel in repo.list_files(to_ref):
         sql = repo.read_at(to_ref, rel)
         for obj in parsing.parse_file(
-            sql, rel, default_schema=repo.schema_for(rel), dialect=dialect
+            sql, rel, default_schema=repo.schema_for(rel, sql), dialect=dialect,
+            type_from=repo.layout.type_from,
         ):
             desired[_norm_key(obj.kind, obj.id, ds)] = obj
 
