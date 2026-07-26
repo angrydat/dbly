@@ -89,40 +89,43 @@ database=appdb
 
 ## Use
 
+**→ Full walkthrough: [docs/USAGE.md](docs/USAGE.md)** — every workflow, step by step.
+
 ```sh
-# preview the changes between the deployed state and a git ref
-dbly plan  --to main --target prod.connection.properties
+# the core loop: preview, then execute (--to is any git ref)
+dbly plan  --target prod --to main
+dbly apply --target prod --to main
 
-# apply them
-dbly apply --to main --target prod.connection.properties
+# adopt a database deployed out-of-band (psql/DataGrip) — record the ref, run no SQL
+dbly baseline --target prod --to HEAD
 
-# export a plain SQL script to run by hand (e.g. through a customer VPN, no dbly needed)
-dbly plan  --to main --target prod.connection.properties --sql deploy.sql
+# deploy just part of the repo, pulling in only the cross-schema objects it needs
+dbly apply --target beta --schema download --with-deps
+
+# has the database drifted from the desired state? (--show-diff shows what changed in each view)
+dbly check  --target prod --show-diff
+
+# fast edit→preview loop against uncommitted changes
+dbly plan  --target dev --worktree
 
 # what is currently deployed?
-dbly status --target prod.connection.properties
+dbly status --target prod
 
-# has the database drifted from the desired state?
-dbly check  --target prod.connection.properties
-dbly check  --target prod.connection.properties --show-diff   # show what changed in each view
-
-# greenfield only: run privileged groundwork once under a superuser profile
-dbly init   --init-target super.connection.properties
-
-# reverse: export a live database as a DDL script — optionally in another engine's dialect
-dbly export --target prod.connection.properties
-dbly export --target prod.connection.properties --dialect postgres --out schema.sql
+# export a plain SQL script for a hand/offline deploy, or reverse a live DB to DDL
+dbly plan   --target prod --to main --sql deploy.sql
+dbly export --target prod --dialect postgres --out schema.sql
 ```
 
-`export` is the inverse of deploy: tables and views transpile across dialects; procedural
-objects (functions, procedures, triggers) are emitted verbatim in the source dialect. Scope it
-with `--schema`. `plan`, `apply` and `check` likewise take `--schema NAME` / `--path SUBPATH`
-to work on part of the repo (e.g. deploy only `bas/`).
-
 **Typical workflow:** edit your object files → commit → `dbly plan` to review → `dbly apply`.
+Destructive steps require `--allow-destructive`. See the [guide](docs/USAGE.md) for scoped
+deploys, migrations, drift-checking, hooks and the full command reference.
 
-Deploying a *subset* of features is just choosing the git ref you deploy (a release tag or
-branch). Destructive steps require `--allow-destructive`.
+## Documentation
+
+- **[Usage guide](docs/USAGE.md)** — task-oriented walkthrough of every workflow.
+- **Architecture decisions:** [ADR 0001 — view drift via engine canonicalization](docs/adr/0001-view-drift-via-engine-canonicalization.md) ·
+  [ADR 0002 — per-file application of replaceable objects](docs/adr/0002-per-file-application-of-replaceable-objects.md).
+- **[CHANGELOG](CHANGELOG.md)** · **[Backlog / ideas](TODO.md)**.
 
 ## Built for trunk-based development
 
