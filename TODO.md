@@ -1,70 +1,75 @@
 # dbly — TODO / Ideen-Backlog
 
-Kurzliste möglicher Verbesserungen, entstanden aus dem Vergleich mit **Atlas**
-(atlasgo.io). Das sind Funktionen, die Atlas (teils nur in der kommerziellen
-Pro-Edition) bietet und die dbly aktuell **nicht** hat — als Anregung, nicht als
-Roadmap. dbly-Stärken (frei, MIT, Oracle/MSSQL nativ, `.py`-Hooks, `plan --sql`)
-bleiben der Ausgangspunkt.
+Stand: **0.14.1**. Erledigtes ist unten zusammengefasst; offen sind die neuen, aus
+echter Nutzung entstandenen Punkte plus der ursprüngliche Atlas-inspirierte Backlog.
 
-## Migrations- & Sicherheits-Analyse
-- **Migration-Linting / Analyzer**: destruktive/riskante Schritte erkennen und
-  warnen bzw. blocken (Atlas `migrate lint`). dbly kennt bisher nur additiv vs.
-  destruktiv + `--allow-destructive`.
-- **Custom Schema Rules / Policies** (z. B. „jede Tabelle braucht PK", Namens-
-  konventionen, Boolean = NUMBER(1) CHECK (0,-1) erzwingen).
+## Als Nächstes (aus realer Nutzung, priorisiert)
+- **`dbly baseline`** — deployten Ref im Ledger eintragen *ohne* SQL auszuführen. Für
+  Brownfield-/per-psql-deployte DBs, damit `plan` inkrementell diff't statt alles als
+  Bootstrap zu listen. → *in Arbeit*
+- **Ersetzbare Objekte pro *Datei* anwenden** (statt pro re-gerendertem Statement).
+  Erhält `SET search_path` / `ALTER … OWNER` / Kommentare / Datei-Reihenfolge / Overloads
+  und behebt die tiefere Ordering-/Faithfulness-Fragilität. Siehe ADR. → *in Arbeit*
+- **View-Round-Trip für Oracle/SQL Server** — zurückgestellt (ADR 0001) bis ein
+  Live-Ziel zum Verifizieren da ist. PG ist fertig; Oracle/MSSQL nutzen bis dahin den
+  strukturellen Fallback (ohne Cast-Elision-Handling).
+- **`check`-Performance** — Introspektion bündeln (eine Inventar-/Spalten-Abfrage statt
+  N Einzelroundtrips); spürbar bei ~1400 Objekten.
+- **Funktion→Funktion-Ordering über PL/pgSQL-Bodies** — sqlglot parst Bodies nicht;
+  Aufrufe an der Oberfläche (`EXECUTE FUNCTION`, `FROM func()`) sind erfasst, Body-interne
+  nicht. Ging bei `download` nur auf, weil die Overloads in einer Datei stehen.
+- Kleinkram: AND/OR-Präzedenz in der `--show-diff`-*Anzeige* (Hash-Vergleich ist korrekt).
+
+## Migrations- & Sicherheits-Analyse (Atlas-Backlog)
+- **Migration-Linting / Analyzer**: destruktive/riskante Schritte erkennen und warnen
+  bzw. blocken (Atlas `migrate lint`). dbly kennt bisher additiv vs. destruktiv +
+  `--allow-destructive`.
+- **Custom Schema Rules / Policies** (z. B. „jede Tabelle braucht PK", Namens­konventionen,
+  Boolean = NUMBER(1) CHECK (0,-1) erzwingen).
 - **Pre-Migration-Checks** (Vorbedingungen prüfen, z. B. Spalte leer vor NOT NULL).
 - **PII-/Security-as-Code**: Spalten als sensibel markieren; RLS deklarativ.
 
 ## Sichtbarkeit
 - **ERD / Schema-Visualisierung** + Auto-Doku aus dem Objektmodell.
-- **Schema-Registry** / zentrale „source of truth" mit Versionsvergleich über
-  Umgebungen hinweg.
-- **Kontinuierliches Drift-Monitoring**: dbly hat `check` on-demand; es fehlt ein
-  laufendes/alarmierendes Monitoring.
-- ~~**Ref-Dekoration in `status` / Plan-Header** (Komfort)~~ ✅ **erledigt (0.3.0)**:
-  `status` und der Plan-Header zeigen jetzt Tag-/Branch-Namen neben dem SHA
-  (`deployed ref: v0.1, main (9ff5e440)`), aufgelöst via `git tag/branch --points-at`.
-  Der Ledger speichert weiterhin nur den SHA.
+- **Schema-Registry** / zentrale „source of truth" mit Versionsvergleich über Umgebungen.
+- **Kontinuierliches Drift-Monitoring** (dbly hat `check` on-demand; es fehlt laufendes/
+  alarmierendes Monitoring).
 
 ## Autoren-Erlebnis
-- Zusätzliche **Schema-Sprache (HCL o. ä.)** und/oder **ORM-Loader** — DB-agnostische
-  Definition neben plain SQL.
+- Zusätzliche **Schema-Sprache (HCL o. ä.)** und/oder **ORM-Loader**.
 - **Testing-Framework** für Schema/Objekte (Atlas `atlas test`).
 - **Interaktive Migrations / Checkpoints** für lange Migrationsketten.
-- ~~**Plan gegen den Working-Tree** (uncommittete Änderungen)~~ ✅ **erledigt (0.3.0)**:
-  `dbly plan --worktree` (Alias `--dirty`) und `dbly check --worktree` planen/prüfen
-  den Arbeitsstand inkl. ungetrackter neuer Objektdateien. Preview-only — `apply`
-  braucht weiterhin einen committeten Ref für den Ledger.
 
 ## Integration
-- Breitere fertige **CI-Rezepte** (GitLab, Azure DevOps, CircleCI) — aktuell nur
-  GH-Actions/Bitbucket-Beispiele.
+- Breitere **CI-Rezepte** (GitLab, Azure DevOps, CircleCI) — aktuell GH-Actions/Bitbucket.
 - **Terraform-Provider / K8s-Operator** (GitOps).
 - **Rollout-/Approval-Flow** (Freigabe vor Apply in Prod).
 
-## Bekannte Design-Frage (aus dem MA31-PoC)
-- Im Planner werden **Tabellen in Changeset-Reihenfolge** emittiert;
-  `topological_order` wird nur auf *replaceable* (Views/Functions) angewandt. Bei
-  Inline-FKs zwischen Tabellen ist auf einem frischen Ziel die Anlege-Reihenfolge
-  dann nicht FK-sicher — prüfen, ob Tabellen ebenfalls topologisch sortiert werden
-  sollten (oder ob der Adapter das per retry-until-stable abfängt).
+---
 
-## Bugs (aus MA31-PoC, Oracle)
+## Erledigt
 
-- ~~**Spalten-Typänderung wird nicht erkannt.**~~ ✅ **erledigt (0.3.0)**: Der
-  Spalten-Diff verglich nur den Namen; `NUMBER` → `NUMBER(10)` blieb unbemerkt. Jetzt
-  wird bei geändertem Typ ein `ALTER TABLE … MODIFY`/`ALTER COLUMN`-Schritt erzeugt
-  (als `destructive` markiert, nie auto-appliziert, mit Datenkompatibilitäts-Warnung).
-  Der Vergleich ist Precision/Scale-bewusst (`NUMBER(10)` ≡ `NUMBER(10,0)`) und
-  normalisiert Introspektions-Rauschen (z. B. SQL-Server `COLLATE`) gegen False Positives.
-- ~~**ADD COLUMN fälschlich als „destructive" klassifiziert.**~~ ✅ **geklärt (0.3.0)**:
-  `TESTFELD` war `NOT NULL` **ohne** Default — die `destructive`-Einstufung ist damit
-  korrekt (kann auf einer befüllten Tabelle nicht sicher hinzugefügt werden). Verbessert:
-  der Grund (*„NOT NULL without default … — unsafe"*) wird jetzt als Hinweis direkt am
-  Plan-Schritt angezeigt, nicht nur im Warnungsblock.
-- ~~**`check` meldet vorhandene Objekte als „missing".**~~ ✅ **erledigt (0.3.0)**:
-  Ursache war eine asymmetrische Key-Normalisierung — der Oracle-Adapter setzte kein
-  `default_schema` und ließ den Owner in `inventory()` weg, sodass die Live-Keys
-  (`table:<name>`) nicht zu den Desired-Keys (`table:dbb.<name>`) passten. Der Adapter
-  löst `default_schema` jetzt zum verbundenen `USER` auf und führt den Owner mit; beide
-  Seiten normalisieren identisch.
+### 0.4.0 – 0.14.1
+- **`dbly.toml`-Projektconfig** (`object_root`, `environment`, `[targets]`, `ignore`).
+- **Teil-Deploy** `--schema` / `--path`; **`--with-deps`** (fehlende Dependency-Closure,
+  stoppt an existierenden Objekten).
+- **View-Drift strukturell korrekt** (ADR 0001): Engine-Round-Trip (Wegwerf-TEMP-View) +
+  AST-Vergleich (Parens/Qualifizierer/FROM-Join-Flatten, präzedenzsicher). Auf echtem
+  Schema **41 → 0** Falschmeldungen.
+- **`dbly check --show-diff`** (Unified-Diff je geänderter View/Definition).
+- **`dbly export`** — Live-DB → DDL, cross-dialect; Prozedurales verbatim.
+- **Struktureller Typ-Vergleich** (kein `INTEGER→INT`/`NUMERIC→DECIMAL`/tz/array/geometry-
+  Rauschen mehr), treues DB-Typ-Rendering.
+- **Terraform-Style-Ausgabe** für `plan`/`apply`/`check`; **Grants apply-only** in `check`.
+- **`CREATE SCHEMA`** für Objekt-Schemas (Greenfield, PG/MSSQL).
+- **FK-Tabellen-Ordering**, **Overload-** und **Funktions-Ordering**; Vorab-Warnung bei
+  out-of-scope Dependencies; saubere Apply-Fehler (kein Traceback).
+- **Quiet by default** (sqlglot/SQLAlchemy-Rauschen; `--debug` schaltet's ein).
+
+### 0.3.0
+- **Ref-Dekoration** in `status`/Plan-Header (Tag-/Branch-Namen neben dem SHA).
+- **Plan/Check gegen Working-Tree** (`--worktree`/`--dirty`).
+- Bug: **Spalten-Typänderung** wird erkannt (`MODIFY`/`ALTER COLUMN`, destructive).
+- Bug: **ADD COLUMN**-Severity geklärt (`NOT NULL` ohne Default = korrekt unsafe, mit Hinweis).
+- Bug: **`check` meldete vorhandene Objekte als „missing"** (Oracle `default_schema`/Owner).
+- Design-Frage **Tabellen topologisch sortieren** — gelöst (FK-Ordering, 0.13.0).

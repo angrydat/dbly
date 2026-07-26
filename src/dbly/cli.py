@@ -331,6 +331,46 @@ def bootstrap(
 
 
 @app.command()
+def baseline(
+    to: str = typer.Option("HEAD", "--to", help="git ref the database is already at."),
+    target: str = typer.Option(..., "--target"),
+    repo_path: Path = typer.Option(Path("."), "--repo"),
+) -> None:
+    """Record a ref as deployed **without running any SQL** — adopt an existing database.
+
+    For a brownfield / already-deployed target (e.g. rolled out by hand via psql/DataGrip):
+    tells dbly's ledger "the database is at <ref>", so subsequent `plan` diffs incrementally
+    from here instead of treating the target as empty. Migrations up to <ref> are marked
+    applied (recorded, not run). Nothing in the schema is touched.
+    """
+    project = load_project(repo_path)
+    repo = _open_repo(repo_path, project)
+    cfg = _resolve_target(project, repo_path, target)
+    adapter = get_adapter(cfg)
+    try:
+        ref = repo.resolve_ref(to)
+        prev = adapter.get_deployed_ref()
+        adapter.ensure_state_table()
+        applied = adapter.applied_migrations()
+        pending = [mid for mid, _ in repo.migration_files(ref) if mid not in applied]
+        for mid in pending:
+            adapter.record_migration(ref, mid)  # recorded as applied, never run
+        adapter.record_deploy(ref, migration_ids=[])
+    finally:
+        adapter.dispose()
+
+    names = _decorations(repo_path, Plan(target=target, from_ref=None, to_ref=ref))
+    console.print(
+        f"[green]✓ baselined[/green] {target} at {report._decorate_ref(ref, names)}"
+    )
+    if prev:
+        console.print(f"[dim]previous deployed ref: {prev[:8]}[/dim]")
+    if pending:
+        console.print(f"[dim]{len(pending)} migration(s) marked applied (not run)[/dim]")
+    console.print("[dim]no SQL was executed — schema untouched.[/dim]")
+
+
+@app.command()
 def status(
     target: str = typer.Option(..., "--target"),
     repo_path: Path = typer.Option(Path("."), "--repo", help="repository root (for ref names)."),

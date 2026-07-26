@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-07-26
+
+### Added
+
+- **`dbly baseline`** — record a ref as deployed without running any SQL, to adopt an existing
+  (brownfield / hand-deployed) database. `plan` then diffs incrementally from that ref instead
+  of treating the target as empty; migrations up to the ref are marked applied (not run).
+  Nothing in the schema is touched.
+
 ## [0.14.1] — 2026-07-25
 
 ### Fixed

@@ -638,3 +638,29 @@ def test_with_deps_pulls_only_missing_cross_schema_dependency(tmp_path: Path):
     order = [s.title for s in plan.steps if s.kind.value == "table"]
     assert order.index("create table shared.customer") < order.index("create table app.orders")
     adapter.dispose()
+
+
+def test_baseline_records_ref_and_migrations_without_running_sql(tmp_path: Path):
+    repo_root = tmp_path / "db"
+    (repo_root / "migrations").mkdir(parents=True)
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text("CREATE TABLE kunde (id INTEGER);", encoding="utf-8")
+    (repo_root / "migrations" / "0001_x.sql").write_text("ALTER TABLE kunde ADD y INTEGER;", encoding="utf-8")
+    ref = _commit(repo_root, "v1")
+    db = tmp_path / "b.db"
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(db)))
+    repo = Repo(repo_root)
+    # brownfield: nothing deployed via dbly yet
+    assert adapter.get_deployed_ref() is None
+
+    # mirror the baseline command: record ref + mark migrations applied, run no object SQL
+    adapter.ensure_state_table()
+    for mid, _ in repo.migration_files(ref):
+        if mid not in adapter.applied_migrations():
+            adapter.record_migration(ref, mid)
+    adapter.record_deploy(ref, [])
+
+    assert adapter.get_deployed_ref() == ref                 # ref now recorded
+    assert "0001_x.sql" in adapter.applied_migrations()      # migration marked applied, not run
+    assert not adapter.table_exists(None, "kunde")           # NO object SQL ran — table absent
+    adapter.dispose()
