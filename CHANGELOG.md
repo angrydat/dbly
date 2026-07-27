@@ -7,6 +7,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-07-27
+
+### Fixed
+
+- **Ownership is set on newly-created tables.** dbly created tables with a generated
+  `CREATE TABLE`, owned by the *connecting* user (often a privileged deploy account), ignoring
+  the file's `ALTER TABLE … OWNER TO …`. A table being created is now applied as its **whole
+  file** (dependency-ordered) — like replaceable objects already were (ADR 0002) — so ownership,
+  constraints and co-located indexes all land. Existing tables keep the additive column diff.
+  Verified against PostgreSQL: table/function owner = the role in the file, not the connector.
+- **`%`-placeholders in PL/pgSQL bodies no longer break apply.** Applying a raw file whose body
+  contains e.g. `format('… %I …')` failed with *"only '%s','%b','%t' are allowed as
+  placeholders, got '%I'"* because SQLAlchemy handed psycopg an empty parameter set, triggering
+  placeholder parsing. Raw scripts now run through the psycopg cursor with no parameters, so the
+  SQL is sent verbatim.
+
 ## [0.18.1] — 2026-07-27
 
 ### Fixed

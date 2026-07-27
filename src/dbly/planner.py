@@ -197,51 +197,63 @@ def build_plan(
     for m in plan.migrations:
         migration_tables |= parsing.referenced_tables(m.sql, dialect=dialect)
 
+    all_objs = [*sequences, *tables, *indexes, *replaceable]
+
+    def _emit_file(rep_obj: ParsedObject, *, note: str | None = None) -> None:
+        """Emit one step that runs ``rep_obj``'s whole source file verbatim (ADR 0002)."""
+        src = rep_obj.source_file
+        extra = sum(1 for o in all_objs if o.source_file == src) - 1
+        title = f"apply {rep_obj.kind.value} {rep_obj.id}"
+        if extra > 0:
+            title += f" (+{extra} more in {src.name})"
+        plan.steps.append(
+            Step(title=title, object_id=rep_obj.id, kind=rep_obj.kind,
+                 severity=Severity.ADDITIVE, sql=repo.read_at(to_ref, src),
+                 source_file=src, note=note, script=True)
+        )
+
+    # A table being *created* runs its whole file (ADR 0002 extended) — so ``ALTER … OWNER TO``,
+    # constraints and co-located indexes all apply, not just a dbly-generated CREATE owned by the
+    # connected (often privileged) user. Existing tables keep the additive column diff.
+    fresh_files: set[Path] = {
+        obj.source_file for obj in tables
+        if obj.id.name.lower() not in migration_tables
+        and not adapter.table_exists(obj.id.schema, obj.id.name)
+    }
+
     for obj in sequences:
-        _plan_create_if_missing(adapter, plan, obj)
-    # Tables are ordered by inter-table FK dependencies (inline ``REFERENCES``), not file order,
-    # so a referenced table is created before the one referencing it on a fresh target.
+        if obj.source_file not in fresh_files:  # a fresh table's file creates its own sequences
+            _plan_create_if_missing(adapter, plan, obj)
+    # FK-dependency order so a referenced table is created before the one referencing it.
+    emitted: set[Path] = set()
     for obj in parsing.topological_order(tables):
         if obj.id.name.lower() in migration_tables:
             plan.warnings.append(
                 f"{obj.id}: managed by a pending migration — additive diff skipped this deploy"
             )
             continue
-        _plan_table(adapter, plan, obj, dialect)
+        if obj.source_file in fresh_files:
+            if obj.source_file not in emitted:
+                emitted.add(obj.source_file)
+                _emit_file(obj, note="new table — full file applied (sets ownership, constraints)")
+        else:
+            _plan_table(adapter, plan, obj, dialect)
     for obj in indexes:
-        _plan_create_if_missing(adapter, plan, obj)
+        if obj.source_file not in fresh_files:  # co-located indexes ride along with the file
+            _plan_create_if_missing(adapter, plan, obj)
 
-    # Replaceable objects: re-applied wholesale, **per source file** (ADR 0002). Dependency-
-    # ordered, then emitted one step per file (in first-seen order) carrying the file's *raw*
-    # content — so SET search_path / ALTER … OWNER / comments / intra-file statement order /
-    # function overloads are preserved instead of a re-rendered single statement.
-    # order replaceable objects: by dependency (default) or by filename (ADR 0003 order=filename)
+    # Replaceable objects: re-applied wholesale, per source file (ADR 0002), one step per file
+    # (raw content — SET search_path / ALTER … OWNER / comments / overloads preserved), ordered
+    # by dependency (default) or filename (ADR 0003 order=filename).
     if repo.layout.order == "filename":
         ordered_replaceable = sorted(replaceable, key=lambda o: o.source_file.as_posix())
     else:
         ordered_replaceable = parsing.topological_order(replaceable)
-    seen_files: set[Path] = set()
     for obj in ordered_replaceable:
-        src = obj.source_file
-        if src in seen_files:
+        if obj.source_file in emitted or obj.source_file in fresh_files:
             continue
-        seen_files.add(src)
-        file_objs = [o for o in replaceable if o.source_file == src]
-        raw = repo.read_at(to_ref, src)
-        title = f"apply {obj.kind.value} {obj.id}"
-        if len(file_objs) > 1:
-            title += f" (+{len(file_objs) - 1} more in {src.name})"
-        plan.steps.append(
-            Step(
-                title=title,
-                object_id=obj.id,
-                kind=obj.kind,
-                severity=Severity.ADDITIVE,
-                sql=raw,
-                source_file=src,
-                script=True,
-            )
-        )
+        emitted.add(obj.source_file)
+        _emit_file(obj)
     return plan
 
 

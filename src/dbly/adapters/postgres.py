@@ -199,11 +199,16 @@ class PostgresAdapter(Adapter):
                     conn.execute(text(stmt))
 
     def run_init_script(self, script: str) -> None:
-        # autocommit: CREATE DATABASE & friends cannot run inside a transaction block.
-        # psycopg3 executes a multi-statement string in a single exec_driver_sql call.
+        # autocommit: CREATE DATABASE & friends can't run inside a transaction block.
+        # Execute via the raw psycopg cursor with **no parameters** — SQLAlchemy's
+        # exec_driver_sql passes an empty param collection, which makes psycopg3 scan the SQL
+        # for %-placeholders and choke on a legitimate `%` in a PL/pgSQL `format('%I', …)` body
+        # or a LIKE pattern. With params omitted, psycopg3 sends the script verbatim.
         with self.engine.connect() as conn:
             conn = conn.execution_options(isolation_level="AUTOCOMMIT")
-            conn.exec_driver_sql(script)
+            dbapi_conn = conn.connection.driver_connection  # the psycopg3 Connection
+            with dbapi_conn.cursor() as cur:
+                cur.execute(script)
 
     def state_table_ddl(self) -> str:
         return _STATE_DDL.strip() + ";"

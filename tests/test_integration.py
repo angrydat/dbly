@@ -603,10 +603,12 @@ def test_tables_ordered_by_fk_dependency(tmp_path: Path):
     adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(tmp_path / "fk.db")))
     repo = Repo(repo_root)
     plan = build_plan(repo, adapter, from_ref=None, to_ref=ref, target="sqlite", dialect="sqlite")
+    # fresh tables are applied per-file (ADR 0002); the FK target's file comes first
     order = [s.title for s in plan.steps if s.kind.value == "table"]
-    assert order.index("create table paket") < order.index("create table cache")
+    assert order.index("apply table paket") < order.index("apply table cache")
     # and it actually applies cleanly (FK target exists first)
-    adapter.apply([s.sql for s in plan.steps])
+    for s in plan.steps:
+        adapter.run_init_script(s.sql) if s.script else adapter.apply([s.sql])
     assert adapter.table_exists(None, "cache") and adapter.table_exists(None, "paket")
     adapter.dispose()
 
@@ -631,12 +633,12 @@ def test_with_deps_pulls_only_missing_cross_schema_dependency(tmp_path: Path):
     plan = build_plan(repo, adapter, from_ref=None, to_ref=ref,
                       target="sqlite", dialect="sqlite", with_deps=True)
     tables = {s.title for s in plan.steps if s.kind.value == "table"}
-    assert "create table app.orders" in tables
-    assert "create table shared.customer" in tables        # missing dep pulled
-    assert "create table shared.unrelated" not in tables    # unrelated sibling NOT pulled
+    assert "apply table app.orders" in tables               # fresh table → per-file apply
+    assert "apply table shared.customer" in tables          # missing dep pulled
+    assert "apply table shared.unrelated" not in tables     # unrelated sibling NOT pulled
     # and customer is ordered before orders (FK-safe)
     order = [s.title for s in plan.steps if s.kind.value == "table"]
-    assert order.index("create table shared.customer") < order.index("create table app.orders")
+    assert order.index("apply table shared.customer") < order.index("apply table app.orders")
     adapter.dispose()
 
 
@@ -681,15 +683,14 @@ def test_replaceable_applied_per_file_verbatim(tmp_path: Path):
     repo = Repo(repo_root)
     plan = build_plan(repo, adapter, from_ref=None, to_ref=ref, target="sqlite", dialect="sqlite")
 
-    script_steps = [s for s in plan.steps if s.script]
-    assert len(script_steps) == 1                              # one step for the whole file
-    assert "CREATE VIEW v_a" in script_steps[0].sql and "CREATE VIEW v_b" in script_steps[0].sql
-    assert "-- two views" in script_steps[0].sql               # comment preserved (verbatim file)
+    # the multi-view file is one script step carrying the whole file verbatim
+    views_step = next(s for s in plan.steps if s.script and s.source_file.name == "views.vw")
+    assert "CREATE VIEW v_a" in views_step.sql and "CREATE VIEW v_b" in views_step.sql
+    assert "-- two views" in views_step.sql                    # comment preserved (verbatim file)
 
     # apply the way the CLI does: statement steps transactionally, script steps via run_init_script
-    adapter.apply([s.sql for s in plan.steps if not s.script])
-    for s in script_steps:
-        adapter.run_init_script(s.sql)
+    for s in plan.steps:
+        adapter.run_init_script(s.sql) if s.script else adapter.apply([s.sql])
     views = {r for r in ("v_a", "v_b")}
     assert all(adapter.has_object(ObjectKind.VIEW, None, v) for v in views)  # both created, in order
     adapter.dispose()
@@ -737,4 +738,26 @@ def test_plan_warns_on_unrecognized_changed_file(tmp_path: Path):
     plan = build_plan(Repo(repo_root), adapter, from_ref=None, to_ref=ref,
                       target="sqlite", dialect="sqlite")
     assert any("mystery.fnc" in w and "no deployable object" in w for w in plan.warnings)
+    adapter.dispose()
+
+
+def test_fresh_table_emits_full_file_step_for_ownership(tmp_path: Path):
+    """A newly-created table is applied as its whole file (so ALTER … OWNER / co-located
+    indexes run), as one script step — not a dbly-generated bare CREATE."""
+    repo_root = tmp_path / "db"
+    (repo_root / "app").mkdir(parents=True)
+    _init_repo(repo_root)
+    (repo_root / "app" / "thing.tbl").write_text(
+        "CREATE TABLE app.thing (id INTEGER);\n"
+        "CREATE INDEX ix_thing ON app.thing (id);\n"
+        "ALTER TABLE app.thing OWNER TO appown;\n", encoding="utf-8")
+    ref = _commit(repo_root, "v1")
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(tmp_path / "o.db")))
+    plan = build_plan(Repo(repo_root), adapter, from_ref=None, to_ref=ref,
+                      target="sqlite", dialect="sqlite")
+    table_steps = [s for s in plan.steps if s.kind.value == "table"]
+    assert len(table_steps) == 1 and table_steps[0].script                # one per-file step
+    assert "OWNER TO appown" in table_steps[0].sql                        # ownership DDL carried
+    # the co-located index is NOT emitted as a separate step (the file creates it)
+    assert not [s for s in plan.steps if s.kind.value == "index"]
     adapter.dispose()

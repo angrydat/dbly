@@ -44,6 +44,16 @@ inside that transaction — is safe: a mid-way failure leaves earlier idempotent
 and the ledger unrecorded, so a re-run simply re-applies them. The ledger is written only after
 everything succeeds.
 
+## Extension (2026-07-27): fresh tables too
+
+The same reasoning applies to a **table being created**: dbly's generated `CREATE TABLE` (from
+the parsed column model) is owned by the *connecting* user and omits the file's
+`ALTER TABLE … OWNER TO …`, co-located indexes, and other statements. So a table that does not
+yet exist is now also applied **as its whole file** (dependency-ordered), which sets ownership
+and creates everything the file declares. An **existing** table keeps the additive column diff
+(its ownership was set when it was first created). Objects co-located in a fresh table's file
+(its indexes/sequences) are not emitted as separate steps — the file creates them.
+
 ## Consequences
 
 - **Positive:** `SET search_path`, `ALTER … OWNER`, comments and intra-file statement order are
