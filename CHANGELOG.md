@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-07-27
+
+### Fixed
+
+- **`type_from = "extension"` no longer mislabels other objects in a multi-object file.** A
+  `.tbl` file that holds a table *and* its indexes had every statement forced to the extension's
+  kind, so the indexes showed up as `table download.ix_…` and `check` reported them as missing
+  tables. The extension kind is now only a fallback — a statement sqlglot recognizes (a
+  `CREATE INDEX`, a view, …) keeps its real kind; the extension fills in only unrecognized
+  statements and whole files sqlglot can't classify.
+
 ## [0.18.0] — 2026-07-27
 
 ### Fixed

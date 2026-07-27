@@ -232,3 +232,15 @@ def test_type_from_extension_rescues_unrecognized_file():
     # default (sql) mode yields nothing for the same file → the planner warns instead of dropping
     assert parsing.parse_file("SET search_path = x;\n", Path("download/tf_thing.fnc"),
                               default_schema="download") == []
+
+
+def test_extension_mode_keeps_recognized_kinds_in_multi_object_file():
+    # a .tbl file holding a table AND its indexes: extension mode must NOT relabel the
+    # indexes as tables — a recognized kind wins, ext_kind only fills in the unrecognized.
+    sql = ("CREATE TABLE download.cache (id INTEGER);\n"
+           "CREATE INDEX ix_cache_prio ON download.cache (id);\n")
+    objs = parsing.parse_file(sql, Path("download/cache.tbl"), default_schema="download",
+                              dialect="postgres", type_from="extension")
+    kinds = {str(o.id): o.kind for o in objs}
+    assert kinds["download.cache"] is ObjectKind.TABLE
+    assert kinds["download.ix_cache_prio"] is ObjectKind.INDEX   # not relabeled to table

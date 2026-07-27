@@ -178,7 +178,10 @@ def parse_file(
         parsed_kind = _kind_from_expression(stmt)
         if parsed_kind is None:
             continue  # not an object definition (e.g. a SET / comment-only statement)
-        kind = ext_kind or parsed_kind  # extension mode overrides a mis-identified kind
+        # A recognized kind is trusted (a CREATE INDEX in a .tbl file stays an index — a file
+        # may hold a table *and* its indexes). The extension only fills in when sqlglot parsed
+        # a CREATE but couldn't classify it, or — below — when it recognized nothing at all.
+        kind = ext_kind if (ext_kind and parsed_kind is ObjectKind.UNKNOWN) else parsed_kind
         oid = _identity(stmt, default_schema)
         deps = _dependencies(stmt, oid.key(), oid.schema)
         objects.append(
