@@ -25,9 +25,10 @@ from dbly.parsing import canonical_hash
 _GO_RE = re.compile(r"^\s*GO\s*$", re.IGNORECASE | re.MULTILINE)
 
 _STATE_DDL = """
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'dbly_state')
+IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id
+               WHERE t.name = 'dbly_state' AND s.name = 'dbo')
 BEGIN
-    CREATE TABLE dbly_state (
+    CREATE TABLE dbo.dbly_state (
         id           BIGINT IDENTITY(1,1) PRIMARY KEY,
         deployed_sha NVARCHAR(64) NOT NULL,
         migration_id NVARCHAR(200) NULL,
@@ -40,6 +41,7 @@ END
 class MssqlAdapter(Adapter):
     transactional_ddl = True
     default_schema = "dbo"
+    ledger_table = "dbo.dbly_state"  # pinned so the ledger doesn't move with the user's schema
 
     def table_exists(self, schema: str | None, name: str) -> bool:
         return inspect(self.engine).has_table(name, schema=schema)
@@ -165,7 +167,7 @@ class MssqlAdapter(Adapter):
 
     def record_deploy_sql(self, ref: str) -> str:
         safe = ref.replace("'", "''")
-        return f"INSERT INTO dbly_state (deployed_sha) VALUES ('{safe}');"
+        return f"INSERT INTO {self.ledger_table} (deployed_sha) VALUES ('{safe}');"
 
     def ensure_state_table(self) -> None:
         with self.engine.begin() as conn:
@@ -176,7 +178,7 @@ class MssqlAdapter(Adapter):
         with self.engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT TOP 1 deployed_sha FROM dbly_state "
+                    f"SELECT TOP 1 deployed_sha FROM {self.ledger_table} "
                     "ORDER BY applied_at DESC, id DESC"
                 )
             ).first()
@@ -188,7 +190,7 @@ class MssqlAdapter(Adapter):
             for mid in (migration_ids or [None]):
                 conn.execute(
                     text(
-                        "INSERT INTO dbly_state (deployed_sha, migration_id) "
+                        f"INSERT INTO {self.ledger_table} (deployed_sha, migration_id) "
                         "VALUES (:sha, :mid)"
                     ),
                     {"sha": ref, "mid": mid},

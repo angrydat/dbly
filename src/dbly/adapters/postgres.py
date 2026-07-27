@@ -15,7 +15,7 @@ from dbly.model import LiveObject, ObjectId, ObjectKind
 from dbly.parsing import canonical_hash
 
 _STATE_DDL = """
-CREATE TABLE IF NOT EXISTS dbly_state (
+CREATE TABLE IF NOT EXISTS public.dbly_state (
     id           bigserial PRIMARY KEY,
     deployed_sha text        NOT NULL,
     migration_id text,
@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS dbly_state (
 class PostgresAdapter(Adapter):
     transactional_ddl = True
     default_schema = "public"
+    # pinned to public so the ledger doesn't move with the connecting user's search_path
+    ledger_table = "public.dbly_state"
 
     def _resolve(self, schema: str | None, name: str) -> tuple[str, str] | None:
         """Find a relation case-insensitively, returning its real (schema, name).
@@ -214,7 +216,8 @@ class PostgresAdapter(Adapter):
         return _STATE_DDL.strip() + ";"
 
     def record_deploy_sql(self, ref: str) -> str:
-        return f"INSERT INTO dbly_state (deployed_sha) VALUES ('{ref.replace(chr(39), chr(39) * 2)}');"
+        return (f"INSERT INTO {self.ledger_table} (deployed_sha) "
+                f"VALUES ('{ref.replace(chr(39), chr(39) * 2)}');")
 
     def ensure_state_table(self) -> None:
         with self.engine.begin() as conn:
@@ -225,7 +228,7 @@ class PostgresAdapter(Adapter):
         with self.engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT deployed_sha FROM dbly_state "
+                    f"SELECT deployed_sha FROM {self.ledger_table} "
                     "ORDER BY applied_at DESC, id DESC LIMIT 1"
                 )
             ).first()
@@ -238,13 +241,13 @@ class PostgresAdapter(Adapter):
                 for mid in migration_ids:
                     conn.execute(
                         text(
-                            "INSERT INTO dbly_state (deployed_sha, migration_id) "
+                            f"INSERT INTO {self.ledger_table} (deployed_sha, migration_id) "
                             "VALUES (:sha, :mid)"
                         ),
                         {"sha": ref, "mid": mid},
                     )
             else:
                 conn.execute(
-                    text("INSERT INTO dbly_state (deployed_sha) VALUES (:sha)"),
+                    text(f"INSERT INTO {self.ledger_table} (deployed_sha) VALUES (:sha)"),
                     {"sha": ref},
                 )

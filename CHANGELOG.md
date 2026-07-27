@@ -7,6 +7,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-07-27
+
+### Fixed
+
+- **The state ledger no longer moves with the connecting user.** `dbly_state` was created
+  unqualified, so it landed in the connecting user's `search_path` schema (e.g. `swwat.dbly_state`).
+  Deploying later as a different user (e.g. a privileged `postgres`) looked at a *different*
+  ledger, found nothing, and re-bootstrapped the whole chain — appending the same SHA again on
+  every run. The ledger is now pinned to a fixed schema (`public.dbly_state` on PostgreSQL,
+  `dbo.dbly_state` on SQL Server), so state is stable across deploy users. Verified against
+  PostgreSQL: deploy as one user, re-run as another → "nothing to do", one ledger row.
+
+  **Upgrade note:** a database whose ledger was previously created in a user schema won't be
+  found at the new fixed location — run `dbly baseline --to <deployed-ref>` once to re-record
+  where it stands (no SQL is executed).
+
 ## [0.19.0] — 2026-07-27
 
 ### Fixed

@@ -47,6 +47,11 @@ class Adapter(abc.ABC):
     #: matching so repo `kunde` aligns with live `public.kunde` / `dbo.kunde`).
     default_schema: str | None = None
 
+    #: fully-qualified name of the state ledger. Pinned to a fixed schema so it doesn't move
+    #: with the connecting user's search_path — otherwise switching deploy users loses the
+    #: recorded state and re-bootstraps. Overridden per engine (public./dbo.).
+    ledger_table: str = "dbly_state"
+
     def __init__(self, cfg: ConnectionConfig):
         self.cfg = cfg
         self._engine: Engine | None = None
@@ -150,7 +155,8 @@ class Adapter(abc.ABC):
         self.ensure_state_table()
         with self.engine.connect() as conn:
             rows = conn.execute(
-                text("SELECT DISTINCT migration_id FROM dbly_state WHERE migration_id IS NOT NULL")
+                text(f"SELECT DISTINCT migration_id FROM {self.ledger_table} "
+                     "WHERE migration_id IS NOT NULL")
             )
             return {r[0] for r in rows}
 

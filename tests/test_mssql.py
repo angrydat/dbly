@@ -31,12 +31,12 @@ def test_add_column_not_null_with_default():
 def test_state_table_ddl_is_guarded():
     ddl = _adapter().state_table_ddl()
     assert "IF NOT EXISTS" in ddl
-    assert "CREATE TABLE dbly_state" in ddl
+    assert "CREATE TABLE dbo.dbly_state" in ddl   # ledger pinned to dbo, not the user's schema
 
 
 def test_record_deploy_sql_escapes_quotes():
     sql = _adapter().record_deploy_sql("a'b")
-    assert sql == "INSERT INTO dbly_state (deployed_sha) VALUES ('a''b');"
+    assert sql == "INSERT INTO dbo.dbly_state (deployed_sha) VALUES ('a''b');"
 
 
 def test_go_batch_split():
