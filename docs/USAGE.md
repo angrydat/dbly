@@ -69,6 +69,32 @@ prod = "conn/prod.properties"
 `sales` (the first segment *below* the root), not `pgsql`. Put the root-level keys before the
 `[targets]` table (a TOML rule).
 
+### Pinning the file layout
+
+By default the schema is the first folder below `object_root` and the object kind comes from
+parsing the SQL. If your repo uses a different convention, pin it with a `[layout]` table
+(all keys optional; defaults shown — see [ADR 0003](adr/0003-configurable-file-layout.md)):
+
+```toml
+[layout]
+schema_from    = "folder"      # folder | search-path | qualified-name
+schema_depth   = 1             # folder mode: which segment under object_root is the schema
+database_depth = 0             # >0 for a <database>/<schema>/… repo
+type_from      = "sql"         # sql | extension
+order          = "dependency"  # dependency | filename
+```
+
+| Option | Use it when… |
+|---|---|
+| `schema_from = "search-path"` | files set `SET search_path = <schema>, …` and then write **unqualified** DDL — dbly takes the schema from the search path. |
+| `schema_from = "qualified-name"` | a flat *file-per-object* repo with no schema folders — the schema must be in the DDL (`CREATE TABLE sales.customer …`). |
+| `schema_depth = 2` + `database_depth = 1` | a `<database>/<schema>/<object>` layout — the schema sits one level deeper; a multi-database repo then deploys **only** the database named in the target profile. |
+| `type_from = "extension"` | the extension is authoritative (`.tbl`/`.vw`/`.fnc`/…). Bonus: a replaceable file the SQL parser can't read (PostGIS/PL-pgSQL) is still recognized — kind from the extension, name from the filename — and applied verbatim instead of dropped. |
+| `order = "filename"` | replaceable objects should apply in filename order (`01_…`, `02_…`) instead of dependency order. |
+
+A schema-qualified name in the DDL always overrides the hint. All defaults equal the built-in
+behaviour, so `[layout]` is purely opt-in.
+
 ## 2. Connect to a database
 
 A connection profile (same `connection.properties` format as DBFit/dbression):
