@@ -723,3 +723,18 @@ def test_layout_database_filter_and_filename_order(tmp_path: Path):
     assert view_titles.index(next(t for t in view_titles if "v1" in t)) < \
            view_titles.index(next(t for t in view_titles if "v2" in t))  # 01_ before 02_
     adapter.dispose()
+
+
+def test_plan_warns_on_unrecognized_changed_file(tmp_path: Path):
+    """A changed object file the parser can't identify must warn, never vanish silently."""
+    repo_root = tmp_path / "db"
+    repo_root.mkdir()
+    _init_repo(repo_root)
+    (repo_root / "kunde.tbl").write_text("CREATE TABLE kunde (id INTEGER);", encoding="utf-8")
+    (repo_root / "mystery.fnc").write_text("-- just a comment, no recognizable object\n", encoding="utf-8")
+    ref = _commit(repo_root, "v1")
+    adapter = SqliteAdapter(ConnectionConfig(environment="sqlite", service=str(tmp_path / "w.db")))
+    plan = build_plan(Repo(repo_root), adapter, from_ref=None, to_ref=ref,
+                      target="sqlite", dialect="sqlite")
+    assert any("mystery.fnc" in w and "no deployable object" in w for w in plan.warnings)
+    adapter.dispose()

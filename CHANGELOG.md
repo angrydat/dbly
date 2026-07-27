@@ -7,7 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.17.0] — 2026-07-26
+## [0.18.0] — 2026-07-27
+
+### Fixed
+
+- **No more silent drops.** A changed object file the parser recognizes no object in (commonly
+  a PL/pgSQL function/trigger sqlglot renders as opaque `Command` nodes) was skipped without a
+  word — not planned, not deployed, not drift-checked. `plan` now **warns** for each such file
+  and points at the `type_from = "extension"` knob.
+- **`type_from = "extension"` now also rescues the `Command` case.** The extension/filename
+  fallback previously only triggered when sqlglot *raised*; it now also applies when sqlglot
+  "succeeds" but yields no `CREATE` (the common PL/pgSQL case), so those objects are recognized
+  (kind from extension, name from filename) and deployed verbatim per file (ADR 0002/0003).
+- **`dbly status` resolves named targets.** `status --target <name>` crashed because it used the
+  raw profile-path resolver instead of the project-aware one; it now resolves `[targets]` names
+  from `dbly.toml` like every other command.
 
 ### Added
 

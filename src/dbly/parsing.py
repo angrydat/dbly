@@ -157,12 +157,19 @@ def parse_file(
     the extension, name from the filename), so it can be applied verbatim instead of dropped.
     """
     ext_kind = kind_from_extension(source_file) if type_from == "extension" else None
+
+    def _from_filename() -> list[ParsedObject]:
+        # extension mode: recognize the object by extension + filename when sqlglot can't
+        # give a CREATE (it raised, or "parsed" the whole file to opaque Command nodes — the
+        # common PL/pgSQL case). Applied verbatim per-file (ADR 0002).
+        return [ParsedObject(id=ObjectId(default_schema, source_file.stem), kind=ext_kind,
+                             sql=sql, source_file=source_file)]
+
     try:
         statements = sqlglot.parse(sql, read=dialect)
     except Exception:  # noqa: BLE001 — unparseable
-        if ext_kind is not None:  # extension fallback: identity from the filename
-            return [ParsedObject(id=ObjectId(default_schema, source_file.stem), kind=ext_kind,
-                                 sql=sql, source_file=source_file)]
+        if ext_kind is not None:
+            return _from_filename()
         raise
     objects: list[ParsedObject] = []
     for stmt in statements:
@@ -183,6 +190,10 @@ def parse_file(
                 depends_on=deps,
             )
         )
+    # sqlglot "succeeded" but recognized no object (all Command nodes — e.g. a PL/pgSQL body).
+    # In extension mode, fall back to the filename so the object isn't silently dropped.
+    if not objects and ext_kind is not None:
+        return _from_filename()
     return objects
 
 

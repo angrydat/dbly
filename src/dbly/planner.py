@@ -133,8 +133,17 @@ def build_plan(
             continue
         sql = repo.read_at(to_ref, fc.path)
         schema_hint = repo.schema_for(fc.path, sql)
-        for obj in parsing.parse_file(sql, fc.path, default_schema=schema_hint, dialect=dialect,
-                                      type_from=repo.layout.type_from):
+        parsed = parsing.parse_file(sql, fc.path, default_schema=schema_hint, dialect=dialect,
+                                    type_from=repo.layout.type_from)
+        if not parsed:
+            # Never drop a changed object file silently — the parser recognized no object in it
+            # (often a PL/pgSQL body sqlglot renders opaquely). Loud, with the actionable knob.
+            plan.warnings.append(
+                f"{fc.path}: no deployable object recognized — NOT deployed "
+                "(parser couldn't identify it; set [layout] type_from=\"extension\" to deploy "
+                "it verbatim by file extension)."
+            )
+        for obj in parsed:
             if obj.kind is ObjectKind.SEQUENCE:
                 sequences.append(obj)
             elif obj.kind is ObjectKind.TABLE:

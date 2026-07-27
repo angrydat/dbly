@@ -386,7 +386,7 @@ def status(
     repo_path: Path = typer.Option(Path("."), "--repo", help="repository root (for ref names)."),
 ) -> None:
     """Show the deployed ref recorded on the target."""
-    cfg = resolve_target(target)
+    cfg = _resolve_target(load_project(repo_path), repo_path, target)
     adapter = get_adapter(cfg)
     try:
         ref = adapter.get_deployed_ref()

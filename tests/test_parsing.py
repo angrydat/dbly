@@ -219,3 +219,16 @@ def test_canonical_view_query_is_structural_not_textual():
     # precedence is encoded in the tree, so parens that matter are NOT collapsed away
     assert cvq("SELECT 1 AS x FROM t WHERE (a OR b) AND c", dialect="postgres") != \
            cvq("SELECT 1 AS x FROM t WHERE a OR b AND c", dialect="postgres")
+
+
+def test_type_from_extension_rescues_unrecognized_file():
+    # content sqlglot doesn't turn into a CREATE (here just a SET) → in extension mode the
+    # object is still recognized from the extension + filename, not silently dropped.
+    from dbly.model import ObjectKind
+    objs = parsing.parse_file("SET search_path = x;\n", Path("download/tf_thing.fnc"),
+                              default_schema="download", type_from="extension")
+    assert len(objs) == 1
+    assert objs[0].kind is ObjectKind.FUNCTION and str(objs[0].id) == "download.tf_thing"
+    # default (sql) mode yields nothing for the same file → the planner warns instead of dropping
+    assert parsing.parse_file("SET search_path = x;\n", Path("download/tf_thing.fnc"),
+                              default_schema="download") == []
